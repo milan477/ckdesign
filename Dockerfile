@@ -27,7 +27,7 @@ FROM nginx:1.27-alpine
 ENV PORT=8080
 
 # Use nginx template system to bind to $PORT
-COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY ./nginx.conf /etc/nginx/templates/default.conf.template
 
 # Static build output
 COPY --from=build /opt/node_app/excalidraw-app/build /usr/share/nginx/html

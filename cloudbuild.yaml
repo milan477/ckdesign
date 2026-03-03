@@ -10,3 +10,6 @@ steps:
 
 images:
   - gcr.io/$PROJECT_ID/ckdesign
+
+options:
+  logging: CLOUD_LOGGING_ONLY

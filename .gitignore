@@ -4,6 +4,7 @@
 .env.production.local
 .env.test.local
 .envrc
+api_key.env
 .eslintcache
 .history
 .idea
@@ -27,3 +28,6 @@ dev-dist
 html
 meta*.json
 .claude
+backend/.venv
+backend/**/__pycache__
+*.pyc

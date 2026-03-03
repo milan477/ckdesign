@@ -78,6 +78,33 @@
       color: var(--color-danger-text);
     }
   }
+
+  .ck-agent-overlay {
+    position: absolute;
+    top: 5.75rem;
+    left: 1rem;
+    width: min(24rem, calc(100vw - 1.25rem));
+    max-height: calc(100vh - 7rem);
+    z-index: var(--zIndex-layerUI);
+    pointer-events: auto;
+    overflow: auto;
+    border-radius: 0.75rem;
+    background: var(--island-bg-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+    border: 1px solid var(--default-border-color);
+    padding: 0.65rem;
+  }
+
+  @media (max-width: 768px) {
+    .ck-agent-overlay {
+      top: auto;
+      bottom: 4.75rem;
+      left: 0.5rem;
+      right: 0.5rem;
+      width: auto;
+      max-height: 42vh;
+    }
+  }
 }
 
 .excalidraw-app.is-collaborating {

@@ -144,6 +144,7 @@ import "./index.scss";
 
 import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { CKAgentPanel } from "./components/CKAgentPanel";
 
 import type { CollabAPI } from "./collab/Collab";
 
@@ -988,6 +989,9 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
+        <div className="ck-agent-overlay">
+          {excalidrawAPI && <CKAgentPanel excalidrawAPI={excalidrawAPI} />}
+        </div>
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>

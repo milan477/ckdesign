@@ -24,7 +24,7 @@ RUN npm_config_target_arch=${TARGETARCH} yarn build:app:docker
 FROM nginx:1.27-alpine
 
 # Cloud Run injects PORT at runtime (default 8080)
-ENV PORT=8080
+ENV PORT=${PORT}
 
 # Use nginx template system to bind to $PORT
 COPY ./nginx.conf /etc/nginx/templates/default.conf.template
@@ -33,7 +33,7 @@ COPY ./nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /opt/node_app/excalidraw-app/build /usr/share/nginx/html
 
 # Optional but recommended
-EXPOSE 8080
+EXPOSE ${PORT}
 
 # Healthcheck must use $PORT
 HEALTHCHECK CMD wget -q -O /dev/null http://localhost:${PORT} || exit 1

@@ -75,7 +75,7 @@ class CKAgent:
                 {"role": "user", "content": prompt_1},
             ],
             text={"verbosity": "low"},
-            reasoning={"effort": "medium"},
+            reasoning={"effort": "low"},
             tools=tools,
             tool_choice={"type": "function", "name": "choose_K_or_C"}
         )
@@ -129,7 +129,7 @@ class CKAgent:
                 {"role": "user", "content": prompt_1},
             ],
             text={"verbosity": "low"},
-            reasoning={"effort": "medium"},
+            reasoning={"effort": "low"},
             tools=tools,
             tool_choice={"type": "function", "name": "choose_K_or_C"}
         )
@@ -354,7 +354,7 @@ class CKAgent:
                 {"role": "user", "content": prompt},
             ],
             text={"verbosity": "low"},
-            reasoning={"effort": "high"},
+            reasoning={"effort": "medium"},
         )
 
         entries = json.loads(response.output[1].content[0].text)['knowledge_entries']

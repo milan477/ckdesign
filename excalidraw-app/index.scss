@@ -82,7 +82,7 @@
   .ck-agent-overlay {
     position: absolute;
     top: 5.75rem;
-    left: 1rem;
+    right: 1rem;
     width: min(24rem, calc(100vw - 1.25rem));
     max-height: calc(100vh - 7rem);
     z-index: var(--zIndex-layerUI);
@@ -99,7 +99,7 @@
     .ck-agent-overlay {
       top: auto;
       bottom: 4.75rem;
-      left: 0.5rem;
+      left: auto;
       right: 0.5rem;
       width: auto;
       max-height: 42vh;

@@ -18,14 +18,17 @@ import {
 
 const NODE_WIDTH = 320;
 const NODE_HEIGHT = 160;
-const ROOT_X = 620;
-const ROOT_Y = 240;
 const HORIZONTAL_GAP = 430;
 const VERTICAL_GAP = 220;
+const DIVIDER_X = 800;
+const CONCEPT_COLUMN_X = DIVIDER_X - HORIZONTAL_GAP / 2 - NODE_WIDTH / 2;
+const KNOWLEDGE_COLUMN_X = DIVIDER_X + HORIZONTAL_GAP / 2 - NODE_WIDTH / 2;
+const ROOT_Y = 240;
 const LABEL_FONT_SIZE = 14;
 const MAX_LABEL_LINE_CHARS = 32;
 const LABEL_LINE_HEIGHT_ESTIMATE = 23;
 const LABEL_VERTICAL_PADDING = 36;
+const COLUMN_DIVIDER_ID = "ck-column-divider";
 
 type NodeStatus = "pending" | "accepted";
 
@@ -67,25 +70,40 @@ const OPERATION_LABELS: Record<CKOperation, string> = {
   ValidateConcept: "ValidateConcept()",
 };
 
-const getNodeColors = (type: CKNodeType, status: NodeStatus) => {
-  if (status === "accepted") {
+const getNodeColors = (type: CKNodeType, _status: NodeStatus, nodeId?: string) => {
+  // C0 (initial concept) is blue
+  if (type === "concept" && nodeId === "C0") {
     return {
-      strokeColor: "#2f9e44",
-      backgroundColor: "#ebfbee",
+      strokeColor: "#1864ab",
+      backgroundColor: "#e7f5ff",
     };
   }
-
+  // All other concepts are yellow
   if (type === "concept") {
     return {
       strokeColor: "#c06c00",
       backgroundColor: "#fff9db",
     };
   }
-
+  // Knowledge is green
   return {
-    strokeColor: "#1864ab",
-    backgroundColor: "#e7f5ff",
+    strokeColor: "#2f9e44",
+    backgroundColor: "#ebfbee",
   };
+};
+
+const getColumnX = (type: CKNodeType) =>
+  type === "concept" ? CONCEPT_COLUMN_X : KNOWLEDGE_COLUMN_X;
+
+const getNextColumnY = (type: CKNodeType, sourceNodes: CKCanvasNode[]) => {
+  const sameTypeNodes = sourceNodes
+    .filter((node) => node.type === type)
+    .sort((a, b) => a.y - b.y);
+  if (!sameTypeNodes.length) {
+    return ROOT_Y;
+  }
+  const lastNode = sameTypeNodes[sameTypeNodes.length - 1];
+  return lastNode.y + lastNode.height + VERTICAL_GAP - NODE_HEIGHT;
 };
 
 const wrapText = (text: string, maxChars: number) => {
@@ -121,6 +139,7 @@ const sanitizeLabelContent = (text: string) =>
     .replace(/\r/g, "")
     .replace(/^\s*concept\s*title\s*:\s*/gim, "")
     .replace(/^\s*concept\s*description\s*:\s*/gim, "")
+    .replace(/^\s*description\s*:\s*/gim, "")
     .trim();
 
 const normalizeParagraphs = (text: string) =>
@@ -342,6 +361,8 @@ export const CKAgentPanel = ({
     }
 
     const ids = new Set<string>();
+    // Always clean up the divider when clearing nodes so it can be re-created
+    ids.add(COLUMN_DIVIDER_ID);
     for (const node of nodesToDelete) {
       ids.add(node.elementId);
       if (node.arrowId) {
@@ -350,10 +371,6 @@ export const CKAgentPanel = ({
       for (const extraArrowId of node.extraArrowIds) {
         ids.add(extraArrowId);
       }
-    }
-
-    if (!ids.size) {
-      return;
     }
 
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -407,8 +424,23 @@ export const CKAgentPanel = ({
     };
 
     const skeleton: ExcalidrawElementSkeleton[] = [];
+
+    // Add divider line if not already live on canvas
+    const hasLiveDivider = liveElementById.has(COLUMN_DIVIDER_ID);
+    if (!hasLiveDivider) {
+      skeleton.push({
+        id: COLUMN_DIVIDER_ID,
+        type: "line",
+        x: DIVIDER_X,
+        y: -10000,
+        width: 0,
+        height: 20000,
+        strokeColor: "#868e96",
+      });
+    }
+
     for (const node of nodesToAdd) {
-      const colors = getNodeColors(node.type, node.status);
+      const colors = getNodeColors(node.type, node.status, node.id);
       const labelText = toLabelText(node);
       skeleton.push({
         id: node.elementId,
@@ -422,8 +454,6 @@ export const CKAgentPanel = ({
         label: {
           text: labelText,
           fontSize: LABEL_FONT_SIZE,
-          textAlign: "left",
-          verticalAlign: "top",
         },
       });
 
@@ -450,9 +480,16 @@ export const CKAgentPanel = ({
         }
         const parentBounds = getLiveBounds(parent);
         const nodeBounds = getLiveBounds(node);
-        const startX = parentBounds.x + parentBounds.width;
+        const parentCenterX = parentBounds.x + parentBounds.width / 2;
+        const nodeCenterX = nodeBounds.x + nodeBounds.width / 2;
+        const leftToRight = parentCenterX <= nodeCenterX;
+        const startX = leftToRight
+          ? parentBounds.x + parentBounds.width
+          : parentBounds.x;
         const startY = parentBounds.y + parentBounds.height / 2;
-        const endX = nodeBounds.x;
+        const endX = leftToRight
+          ? nodeBounds.x
+          : nodeBounds.x + nodeBounds.width;
         const endY = nodeBounds.y + nodeBounds.height / 2;
         skeleton.push({
           id: arrowId,
@@ -526,8 +563,12 @@ export const CKAgentPanel = ({
       desc,
       operationRationale,
       parentId: primaryParentId,
-      x: options?.x ?? parent.x + HORIZONTAL_GAP,
-      y: options?.y ?? parent.y + direction * step * VERTICAL_GAP,
+      x: options?.x ?? getColumnX(type),
+      y:
+        options?.y ??
+        (type === parent.type
+          ? parent.y + direction * step * VERTICAL_GAP
+          : getNextColumnY(type, nodesRef.current)),
       width: NODE_WIDTH,
       height: estimateNodeHeight(type, nodeId, title, desc),
       generated: true,
@@ -573,18 +614,18 @@ export const CKAgentPanel = ({
     sequenceRef.current = 1;
 
     const rootNode: CKCanvasNode = {
-      id: "C1",
+      id: "C0",
       type: "concept",
       title: concept || "(initial concept)",
       desc: "Initial concept provided by user.",
       operationRationale: "User-defined starting concept.",
       parentId: null,
-      x: positionById.get("C1")?.x ?? ROOT_X,
-      y: positionById.get("C1")?.y ?? ROOT_Y,
+      x: positionById.get("C0")?.x ?? CONCEPT_COLUMN_X,
+      y: positionById.get("C0")?.y ?? ROOT_Y,
       width: NODE_WIDTH,
       height: estimateNodeHeight(
         "concept",
-        "C1",
+        "C0",
         concept || "(initial concept)",
         "Initial concept provided by user.",
       ),
@@ -606,7 +647,7 @@ export const CKAgentPanel = ({
         desc: "Initial knowledge provided by user.",
         operationRationale: "User-defined initial knowledge.",
         parentId: rootNode.id,
-        x: positionById.get(id)?.x ?? ROOT_X + HORIZONTAL_GAP,
+        x: positionById.get(id)?.x ?? KNOWLEDGE_COLUMN_X,
         y:
           positionById.get(id)?.y ??
           ROOT_Y -
@@ -725,11 +766,6 @@ export const CKAgentPanel = ({
             ? sourceKnowledgeNodes.reduce((sum, node) => sum + node.y, 0) /
               sourceKnowledgeNodes.length
             : undefined;
-        const sourceMaxX =
-          sourceKnowledgeNodes.length > 0
-            ? Math.max(...sourceKnowledgeNodes.map((node) => node.x))
-            : undefined;
-
         const generated = makeGeneratedNode(
           result.generatedEntry.type,
           focusNode,
@@ -740,10 +776,7 @@ export const CKAgentPanel = ({
             ? {
                 id: result.generatedEntry.id,
                 sourceParentIds: sourceKnowledgeIds,
-                x:
-                  sourceMaxX !== undefined
-                    ? sourceMaxX + HORIZONTAL_GAP
-                    : undefined,
+                x: getColumnX(result.generatedEntry.type),
                 y: averageY,
               }
             : result.generatedEntry.id
@@ -776,7 +809,7 @@ export const CKAgentPanel = ({
       prev.map((node) => (node.id === selectedNode.id ? updated : node)),
     );
 
-    const colors = getNodeColors(updated.type, updated.status);
+    const colors = getNodeColors(updated.type, updated.status, updated.id);
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
     const nextElements = currentElements.map((element) =>
       element.id === updated.elementId

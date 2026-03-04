@@ -1,0 +1,977 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  convertToExcalidrawElements,
+  newElementWith,
+} from "@excalidraw/excalidraw";
+
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElement } from "@excalidraw/element/types";
+import type { ExcalidrawElementSkeleton } from "@excalidraw/element";
+
+import {
+  runCKOperation,
+  type CKAgentMessage,
+  type CKEntryContext,
+  type CKNodeType,
+  type CKOperation,
+} from "../services/ckAgent";
+
+const NODE_WIDTH = 320;
+const NODE_HEIGHT = 160;
+const ROOT_X = 620;
+const ROOT_Y = 240;
+const HORIZONTAL_GAP = 430;
+const VERTICAL_GAP = 220;
+const LABEL_FONT_SIZE = 14;
+const MAX_LABEL_LINE_CHARS = 32;
+const LABEL_LINE_HEIGHT_ESTIMATE = 23;
+const LABEL_VERTICAL_PADDING = 36;
+
+type NodeStatus = "pending" | "accepted";
+
+type CKCanvasNode = CKEntryContext & {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  generated: boolean;
+  status: NodeStatus;
+  elementId: string;
+  arrowId: string | null;
+  extraArrowIds: string[];
+  sourceParentIds: string[];
+  sequence: number;
+};
+
+type TranscriptItem = CKAgentMessage & {
+  id: number;
+};
+
+const ACTIONS: readonly CKOperation[] = [
+  "CreateConcept",
+  "ExpandConcept",
+  "ReorderConcept",
+  "DecideNovelConcept",
+  "CreateKnowledge",
+  "ReorderKnowledge",
+  "ValidateConcept",
+];
+
+const OPERATION_LABELS: Record<CKOperation, string> = {
+  CreateConcept: "CreateConcept()",
+  ExpandConcept: "ExpandConcept()",
+  ReorderConcept: "ReorderConcept()",
+  DecideNovelConcept: "DecideNovelConcept()",
+  CreateKnowledge: "CreateKnowledge()",
+  ReorderKnowledge: "ReorderKnowledge()",
+  ValidateConcept: "ValidateConcept()",
+};
+
+const getNodeColors = (type: CKNodeType, status: NodeStatus) => {
+  if (status === "accepted") {
+    return {
+      strokeColor: "#2f9e44",
+      backgroundColor: "#ebfbee",
+    };
+  }
+
+  if (type === "concept") {
+    return {
+      strokeColor: "#c06c00",
+      backgroundColor: "#fff9db",
+    };
+  }
+
+  return {
+    strokeColor: "#1864ab",
+    backgroundColor: "#e7f5ff",
+  };
+};
+
+const wrapText = (text: string, maxChars: number) => {
+  const paragraphs = text.split("\n");
+  const wrapped: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      wrapped.push("");
+      continue;
+    }
+
+    let current = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const next = words[i];
+      if (`${current} ${next}`.length <= maxChars) {
+        current = `${current} ${next}`;
+      } else {
+        wrapped.push(current);
+        current = next;
+      }
+    }
+    wrapped.push(current);
+  }
+
+  return wrapped.join("\n");
+};
+
+const sanitizeLabelContent = (text: string) =>
+  text
+    .replace(/\*\*/g, "")
+    .replace(/\r/g, "")
+    .replace(/^\s*concept\s*title\s*:\s*/gim, "")
+    .replace(/^\s*concept\s*description\s*:\s*/gim, "")
+    .trim();
+
+const normalizeParagraphs = (text: string) =>
+  text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+const getLabelFields = (title: string, desc: string) => {
+  const cleanTitle = sanitizeLabelContent(title).replace(/\s+/g, " ");
+  let cleanDesc = normalizeParagraphs(sanitizeLabelContent(desc));
+  const normalizedTitle = cleanTitle.toLowerCase();
+  if (
+    normalizedTitle &&
+    cleanDesc.replace(/\s+/g, " ").toLowerCase().startsWith(normalizedTitle)
+  ) {
+    cleanDesc = cleanDesc.slice(cleanTitle.length).trim();
+  }
+  return { cleanTitle, cleanDesc };
+};
+
+const buildLabelText = (
+  type: CKNodeType,
+  id: string,
+  title: string,
+  desc: string,
+) => {
+  const { cleanTitle, cleanDesc } = getLabelFields(title, desc);
+  const wrappedTitle = wrapText(cleanTitle, MAX_LABEL_LINE_CHARS)
+    .split("\n")
+    .map((line, idx) => (idx === 0 ? `Title: ${line}` : line))
+    .join("\n");
+  const wrappedDesc = wrapText(cleanDesc, MAX_LABEL_LINE_CHARS)
+    .split("\n")
+    .map((line, idx) => (idx === 0 ? `Description: ${line}` : line))
+    .join("\n");
+  return `${type.toUpperCase()} ${id}\n\n${wrappedTitle}\n\n${wrappedDesc}`;
+};
+
+const toLabelText = (node: CKCanvasNode) =>
+  buildLabelText(node.type, node.id, node.title, node.desc);
+
+const estimateNodeHeight = (
+  type: CKNodeType,
+  id: string,
+  title: string,
+  desc: string,
+) => {
+  const lines = buildLabelText(type, id, title, desc).split("\n").length;
+  const estimatedHeight =
+    lines * LABEL_LINE_HEIGHT_ESTIMATE + LABEL_VERTICAL_PADDING;
+  return Math.max(NODE_HEIGHT, estimatedHeight);
+};
+
+const toContextEntries = (nodes: CKCanvasNode[]): CKEntryContext[] =>
+  nodes.map((node) => ({
+    id: node.id,
+    type: node.type,
+    title: node.title,
+    desc: node.desc,
+    operationRationale: node.operationRationale,
+    parentId: node.parentId,
+  }));
+
+const reorderByIds = (
+  nodes: CKCanvasNode[],
+  orderedIds: string[],
+  type: CKNodeType,
+) => {
+  const orderMap = new Map(orderedIds.map((id, idx) => [id, idx]));
+  const sortedTargets = nodes
+    .filter((node) => node.type === type)
+    .sort((a, b) => {
+      const aIndex = orderMap.get(a.id);
+      const bIndex = orderMap.get(b.id);
+      if (aIndex !== undefined && bIndex !== undefined) {
+        return aIndex - bIndex;
+      }
+      if (aIndex !== undefined) {
+        return -1;
+      }
+      if (bIndex !== undefined) {
+        return 1;
+      }
+      return a.sequence - b.sequence;
+    });
+
+  let pointer = 0;
+  return nodes.map((node) =>
+    node.type === type ? sortedTargets[pointer++] : node,
+  );
+};
+
+const hasContainerId = (
+  element: ExcalidrawElement,
+): element is ExcalidrawElement & { containerId: string } =>
+  "containerId" in element && typeof element.containerId === "string";
+
+export const CKAgentPanel = ({
+  excalidrawAPI,
+}: {
+  excalidrawAPI: ExcalidrawImperativeAPI | null;
+}) => {
+  const [initialConcept, setInitialConcept] = useState("");
+  const [initialKnowledge, setInitialKnowledge] = useState<string[]>([""]);
+  const [nodes, setNodes] = useState<CKCanvasNode[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+  const [latestDecision, setLatestDecision] = useState("");
+  const [busyOperation, setBusyOperation] = useState<CKOperation | null>(null);
+
+  const conceptCounterRef = useRef(1);
+  const knowledgeCounterRef = useRef(0);
+  const elementCounterRef = useRef(1);
+  const sequenceRef = useRef(1);
+  const childCounterRef = useRef<Record<string, number>>({});
+  const transcriptCounterRef = useRef(1);
+  const nodesRef = useRef<CKCanvasNode[]>([]);
+
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.id === selectedNodeId) || null,
+    [nodes, selectedNodeId],
+  );
+  const canRunOperations =
+    initialConcept.trim().length > 0 &&
+    initialKnowledge.some((entry) => entry.trim().length > 0);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  const pushTranscript = (messages: CKAgentMessage[]) => {
+    if (!messages.length) {
+      return;
+    }
+
+    setTranscript((prev) => [
+      ...prev,
+      ...messages.map((message) => ({
+        ...message,
+        id: transcriptCounterRef.current++,
+      })),
+    ]);
+  };
+
+  const nextElementId = (prefix: string) =>
+    `ck-${prefix}-${elementCounterRef.current++}`;
+
+  const nextNodeId = (type: CKNodeType) => {
+    if (type === "concept") {
+      conceptCounterRef.current += 1;
+      return `C${conceptCounterRef.current}`;
+    }
+
+    knowledgeCounterRef.current += 1;
+    return `K${knowledgeCounterRef.current}`;
+  };
+
+  const syncCounterWithNodeId = (id: string) => {
+    const match = /^([CK])(\d+)$/i.exec(id.trim());
+    if (!match) {
+      return;
+    }
+    const prefix = match[1].toUpperCase();
+    const sequenceNumber = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(sequenceNumber)) {
+      return;
+    }
+    if (prefix === "C") {
+      conceptCounterRef.current = Math.max(
+        conceptCounterRef.current,
+        sequenceNumber,
+      );
+      return;
+    }
+    knowledgeCounterRef.current = Math.max(
+      knowledgeCounterRef.current,
+      sequenceNumber,
+    );
+  };
+
+  const pruneDeletedGeneratedNodes = (sourceNodes: CKCanvasNode[]) => {
+    if (!excalidrawAPI || !sourceNodes.length) {
+      return sourceNodes;
+    }
+
+    const aliveElementIds = new Set(
+      excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .filter((element) => !element.isDeleted)
+        .map((element) => element.id),
+    );
+
+    const pruned = sourceNodes.filter(
+      (node) => !node.generated || aliveElementIds.has(node.elementId),
+    );
+
+    if (pruned.length !== sourceNodes.length) {
+      setNodes(pruned);
+      setSelectedNodeId((prevSelected) =>
+        pruned.some((node) => node.id === prevSelected) ? prevSelected : null,
+      );
+      nodesRef.current = pruned;
+    }
+
+    return pruned;
+  };
+
+  const toast = (message: string) => {
+    if (excalidrawAPI) {
+      excalidrawAPI.setToast({ message });
+    }
+  };
+
+  const deleteNodesFromCanvas = (nodesToDelete: CKCanvasNode[]) => {
+    if (!excalidrawAPI || !nodesToDelete.length) {
+      return;
+    }
+
+    const ids = new Set<string>();
+    for (const node of nodesToDelete) {
+      ids.add(node.elementId);
+      if (node.arrowId) {
+        ids.add(node.arrowId);
+      }
+      for (const extraArrowId of node.extraArrowIds) {
+        ids.add(extraArrowId);
+      }
+    }
+
+    if (!ids.size) {
+      return;
+    }
+
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const updatedElements = currentElements.map((element) => {
+      if (ids.has(element.id)) {
+        return newElementWith(element, { isDeleted: true });
+      }
+      if (hasContainerId(element) && ids.has(element.containerId)) {
+        return newElementWith(element, { isDeleted: true });
+      }
+      return element;
+    });
+
+    excalidrawAPI.updateScene({ elements: updatedElements });
+  };
+
+  const addNodesToCanvas = (
+    nodesToAdd: CKCanvasNode[],
+    existingNodes: CKCanvasNode[],
+    options?: { shouldScroll?: boolean },
+  ) => {
+    if (!excalidrawAPI || !nodesToAdd.length) {
+      return;
+    }
+
+    const allNodes = new Map<string, CKCanvasNode>();
+    for (const node of existingNodes) {
+      allNodes.set(node.id, node);
+    }
+    for (const node of nodesToAdd) {
+      allNodes.set(node.id, node);
+    }
+
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const liveElementById = new Map(
+      currentElements
+        .filter((element) => !element.isDeleted)
+        .map((element) => [element.id, element]),
+    );
+    const getLiveBounds = (candidate: CKCanvasNode) => {
+      const live = liveElementById.get(candidate.elementId);
+      if (!live) {
+        return candidate;
+      }
+      return {
+        x: live.x,
+        y: live.y,
+        width: live.width,
+        height: live.height,
+      };
+    };
+
+    const skeleton: ExcalidrawElementSkeleton[] = [];
+    for (const node of nodesToAdd) {
+      const colors = getNodeColors(node.type, node.status);
+      const labelText = toLabelText(node);
+      skeleton.push({
+        id: node.elementId,
+        type: "rectangle",
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height,
+        backgroundColor: colors.backgroundColor,
+        strokeColor: colors.strokeColor,
+        label: {
+          text: labelText,
+          fontSize: LABEL_FONT_SIZE,
+          textAlign: "left",
+          verticalAlign: "top",
+        },
+      });
+
+      const sourceParentIds = node.sourceParentIds.length
+        ? node.sourceParentIds
+        : node.parentId
+        ? [node.parentId]
+        : [];
+      const arrowIds = [
+        ...(node.arrowId ? [node.arrowId] : []),
+        ...node.extraArrowIds,
+      ];
+
+      for (let i = 0; i < sourceParentIds.length; i++) {
+        const parentId = sourceParentIds[i];
+        const arrowId = arrowIds[i];
+        if (!arrowId) {
+          continue;
+        }
+
+        const parent = allNodes.get(parentId);
+        if (!parent) {
+          continue;
+        }
+        const parentBounds = getLiveBounds(parent);
+        const nodeBounds = getLiveBounds(node);
+        const startX = parentBounds.x + parentBounds.width;
+        const startY = parentBounds.y + parentBounds.height / 2;
+        const endX = nodeBounds.x;
+        const endY = nodeBounds.y + nodeBounds.height / 2;
+        skeleton.push({
+          id: arrowId,
+          type: "arrow",
+          x: startX,
+          y: startY,
+          width: endX - startX,
+          height: endY - startY,
+          strokeColor: "#495057",
+          start: {
+            id: parent.elementId,
+            x: startX,
+            y: startY,
+          },
+          end: {
+            id: node.elementId,
+            x: endX,
+            y: endY,
+          },
+        });
+      }
+    }
+
+    const generated = convertToExcalidrawElements(skeleton, {
+      regenerateIds: false,
+    });
+    excalidrawAPI.updateScene({
+      elements: [...currentElements, ...generated],
+    });
+    if (options?.shouldScroll !== false) {
+      excalidrawAPI.scrollToContent(generated, { animate: true });
+    }
+  };
+
+  const makeGeneratedNode = (
+    type: CKNodeType,
+    parent: CKCanvasNode,
+    title: string,
+    desc: string,
+    operationRationale: string,
+    options?: {
+      id?: string;
+      sourceParentIds?: string[];
+      x?: number;
+      y?: number;
+    },
+  ): CKCanvasNode => {
+    const defaultSourceParentIds = options?.sourceParentIds?.length
+      ? options.sourceParentIds
+      : [parent.id];
+    const primaryParentId = defaultSourceParentIds[0] || parent.id;
+
+    const siblingCount = childCounterRef.current[primaryParentId] || 0;
+    childCounterRef.current[primaryParentId] = siblingCount + 1;
+
+    const step = Math.floor(siblingCount / 2) + 1;
+    const direction = siblingCount % 2 === 0 ? 1 : -1;
+    const arrowIds = defaultSourceParentIds.map(() => nextElementId("arrow"));
+    const providedId = options?.id?.trim();
+    const hasProvidedId =
+      !!providedId && !nodesRef.current.some((node) => node.id === providedId);
+    const nodeId = hasProvidedId ? providedId! : nextNodeId(type);
+    if (hasProvidedId) {
+      syncCounterWithNodeId(nodeId);
+    }
+
+    return {
+      id: nodeId,
+      type,
+      title,
+      desc,
+      operationRationale,
+      parentId: primaryParentId,
+      x: options?.x ?? parent.x + HORIZONTAL_GAP,
+      y: options?.y ?? parent.y + direction * step * VERTICAL_GAP,
+      width: NODE_WIDTH,
+      height: estimateNodeHeight(type, nodeId, title, desc),
+      generated: true,
+      status: "pending",
+      elementId: nextElementId("node"),
+      arrowId: arrowIds[0] || null,
+      extraArrowIds: arrowIds.slice(1),
+      sourceParentIds: defaultSourceParentIds,
+      sequence: sequenceRef.current++,
+    };
+  };
+
+  const syncLiveInitialNodes = () => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    const prevNodes = nodesRef.current;
+    const prevInitialNodes = prevNodes.filter((node) => !node.generated);
+    const concept = initialConcept.trim();
+    const knowledgeEntries = initialKnowledge
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    const shouldRenderRoot = concept.length > 0 || knowledgeEntries.length > 0;
+    if (!shouldRenderRoot) {
+      if (prevNodes.length) {
+        deleteNodesFromCanvas(prevNodes);
+      }
+      setNodes([]);
+      setSelectedNodeId(null);
+      setLatestDecision("");
+      return;
+    }
+
+    const positionById = new Map(
+      prevInitialNodes.map((node) => [node.id, { x: node.x, y: node.y }]),
+    );
+
+    conceptCounterRef.current = 1;
+    knowledgeCounterRef.current = knowledgeEntries.length;
+    childCounterRef.current = {};
+    sequenceRef.current = 1;
+
+    const rootNode: CKCanvasNode = {
+      id: "C1",
+      type: "concept",
+      title: concept || "(initial concept)",
+      desc: "Initial concept provided by user.",
+      operationRationale: "User-defined starting concept.",
+      parentId: null,
+      x: positionById.get("C1")?.x ?? ROOT_X,
+      y: positionById.get("C1")?.y ?? ROOT_Y,
+      width: NODE_WIDTH,
+      height: estimateNodeHeight(
+        "concept",
+        "C1",
+        concept || "(initial concept)",
+        "Initial concept provided by user.",
+      ),
+      generated: false,
+      status: "accepted",
+      elementId: nextElementId("node"),
+      arrowId: null,
+      extraArrowIds: [],
+      sourceParentIds: [],
+      sequence: sequenceRef.current++,
+    };
+
+    const knowledgeNodes = knowledgeEntries.map((entry, index) => {
+      const id = `K${index + 1}`;
+      return {
+        id,
+        type: "knowledge" as const,
+        title: entry,
+        desc: "Initial knowledge provided by user.",
+        operationRationale: "User-defined initial knowledge.",
+        parentId: rootNode.id,
+        x: positionById.get(id)?.x ?? ROOT_X + HORIZONTAL_GAP,
+        y:
+          positionById.get(id)?.y ??
+          ROOT_Y -
+            ((knowledgeEntries.length - 1) * VERTICAL_GAP) / 2 +
+            index * VERTICAL_GAP,
+        width: NODE_WIDTH,
+        height: estimateNodeHeight(
+          "knowledge",
+          id,
+          entry,
+          "Initial knowledge provided by user.",
+        ),
+        generated: false,
+        status: "accepted" as const,
+        elementId: nextElementId("node"),
+        arrowId: null,
+        extraArrowIds: [],
+        sourceParentIds: [],
+        sequence: sequenceRef.current++,
+      };
+    });
+
+    childCounterRef.current[rootNode.id] = knowledgeNodes.length;
+
+    const nextNodes = [rootNode, ...knowledgeNodes];
+    if (prevNodes.length) {
+      deleteNodesFromCanvas(prevNodes);
+    }
+    addNodesToCanvas(nextNodes, [], { shouldScroll: false });
+    setNodes(nextNodes);
+    setSelectedNodeId((prevSelected) =>
+      nextNodes.some((node) => node.id === prevSelected)
+        ? prevSelected
+        : rootNode.id,
+    );
+    setTranscript([]);
+    setLatestDecision("");
+  };
+
+  useEffect(() => {
+    syncLiveInitialNodes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConcept, initialKnowledge, excalidrawAPI]);
+
+  const runOperation = async (operation: CKOperation) => {
+    const currentNodes = pruneDeletedGeneratedNodes(nodesRef.current);
+
+    if (!canRunOperations || !currentNodes.length) {
+      toast("Add initial concept and at least one knowledge entry.");
+      return;
+    }
+
+    const focusNode =
+      (selectedNodeId
+        ? currentNodes.find((node) => node.id === selectedNodeId) || null
+        : null) ||
+      [...currentNodes].reverse().find((node) => node.type === "concept") ||
+      null;
+    if (!focusNode) {
+      toast("Select a node or initialize the session.");
+      return;
+    }
+
+    setBusyOperation(operation);
+    try {
+      const result = await runCKOperation({
+        operation,
+        topic: initialConcept.trim(),
+        focusEntry: {
+          id: focusNode.id,
+          type: focusNode.type,
+          title: focusNode.title,
+          desc: focusNode.desc,
+          operationRationale: focusNode.operationRationale,
+          parentId: focusNode.parentId,
+        },
+        history: toContextEntries(currentNodes),
+      });
+
+      pushTranscript(result.dialogue);
+
+      if (result.reorderedIds) {
+        const targetType =
+          operation === "ReorderConcept" ? "concept" : "knowledge";
+        setNodes((prev) =>
+          reorderByIds(prev, result.reorderedIds!, targetType),
+        );
+        setLatestDecision(`${operation} completed.`);
+      }
+
+      if (result.noveltyDecision) {
+        setLatestDecision(
+          `Novelty: ${
+            result.noveltyDecision.isNovel ? "Novel" : "Not novel"
+          } - ${result.noveltyDecision.rationale}`,
+        );
+      }
+
+      if (result.generatedEntry) {
+        const knowledgeNodeById = new Map(
+          currentNodes
+            .filter((node) => node.type === "knowledge")
+            .map((node) => [node.id, node]),
+        );
+        const sourceKnowledgeIds =
+          operation === "CreateConcept"
+            ? Array.from(
+                new Set(result.generatedEntry.sourceKnowledgeIds || []),
+              ).filter((id) => knowledgeNodeById.has(id))
+            : [];
+        const sourceKnowledgeNodes = sourceKnowledgeIds
+          .map((id) => knowledgeNodeById.get(id))
+          .filter((node): node is CKCanvasNode => !!node);
+        const averageY =
+          sourceKnowledgeNodes.length > 0
+            ? sourceKnowledgeNodes.reduce((sum, node) => sum + node.y, 0) /
+              sourceKnowledgeNodes.length
+            : undefined;
+        const sourceMaxX =
+          sourceKnowledgeNodes.length > 0
+            ? Math.max(...sourceKnowledgeNodes.map((node) => node.x))
+            : undefined;
+
+        const generated = makeGeneratedNode(
+          result.generatedEntry.type,
+          focusNode,
+          result.generatedEntry.title,
+          result.generatedEntry.desc,
+          result.generatedEntry.operationRationale,
+          sourceKnowledgeIds.length
+            ? {
+                id: result.generatedEntry.id,
+                sourceParentIds: sourceKnowledgeIds,
+                x:
+                  sourceMaxX !== undefined
+                    ? sourceMaxX + HORIZONTAL_GAP
+                    : undefined,
+                y: averageY,
+              }
+            : result.generatedEntry.id
+            ? { id: result.generatedEntry.id }
+            : undefined,
+        );
+        setNodes((prev) => [...prev, generated]);
+        nodesRef.current = [...currentNodes, generated];
+        setSelectedNodeId(generated.id);
+        setLatestDecision(result.generatedEntry.operationRationale);
+        addNodesToCanvas([generated], currentNodes);
+      }
+    } catch (error) {
+      toast(
+        error instanceof Error ? error.message : `Failed to run ${operation}.`,
+      );
+    } finally {
+      setBusyOperation(null);
+    }
+  };
+
+  const acceptSelectedNode = () => {
+    if (!selectedNode || !selectedNode.generated || !excalidrawAPI) {
+      toast("Select a generated node to accept.");
+      return;
+    }
+
+    const updated = { ...selectedNode, status: "accepted" as const };
+    setNodes((prev) =>
+      prev.map((node) => (node.id === selectedNode.id ? updated : node)),
+    );
+
+    const colors = getNodeColors(updated.type, updated.status);
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const nextElements = currentElements.map((element) =>
+      element.id === updated.elementId
+        ? newElementWith(element, {
+            strokeColor: colors.strokeColor,
+            backgroundColor: colors.backgroundColor,
+          })
+        : element,
+    );
+    excalidrawAPI.updateScene({ elements: nextElements });
+    setLatestDecision(`${updated.id} accepted.`);
+  };
+
+  const rejectSelectedNode = () => {
+    if (!selectedNode || !selectedNode.generated) {
+      toast("Select a generated node to reject.");
+      return;
+    }
+
+    const childrenByParent = new Map<string, CKCanvasNode[]>();
+    for (const node of nodes) {
+      if (!node.parentId) {
+        continue;
+      }
+      const bucket = childrenByParent.get(node.parentId) || [];
+      bucket.push(node);
+      childrenByParent.set(node.parentId, bucket);
+    }
+
+    const stack = [selectedNode.id];
+    const idsToRemove = new Set<string>();
+    while (stack.length) {
+      const current = stack.pop()!;
+      idsToRemove.add(current);
+      const children = childrenByParent.get(current) || [];
+      for (const child of children) {
+        stack.push(child.id);
+      }
+    }
+
+    const nodesToDelete = nodes.filter(
+      (node) => idsToRemove.has(node.id) && node.generated,
+    );
+    deleteNodesFromCanvas(nodesToDelete);
+
+    setNodes((prev) => prev.filter((node) => !idsToRemove.has(node.id)));
+    setSelectedNodeId(selectedNode.parentId || null);
+    setLatestDecision(`${selectedNode.id} rejected and removed.`);
+  };
+
+  const addKnowledgeInput = () => {
+    setInitialKnowledge((prev) => [...prev, ""]);
+  };
+
+  const removeKnowledgeInput = (index: number) => {
+    setInitialKnowledge((prev) => {
+      if (prev.length === 1) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== index);
+    });
+  };
+
+  return (
+    <div className="ck-agent-panel">
+      <div className="ck-agent-section">
+        <div className="ck-agent-title">C-K Agents</div>
+        <label htmlFor="ck-initial-concept">Initial concept</label>
+        <textarea
+          id="ck-initial-concept"
+          className="ck-agent-input"
+          value={initialConcept}
+          placeholder="Enter one initial concept..."
+          onChange={(event) => setInitialConcept(event.target.value)}
+          rows={3}
+        />
+
+        <label>Initial knowledge</label>
+        {initialKnowledge.map((entry, index) => (
+          <div key={`knowledge-${index}`} className="ck-knowledge-row">
+            <textarea
+              className="ck-agent-input"
+              value={entry}
+              placeholder={`Knowledge ${index + 1}`}
+              onChange={(event) =>
+                setInitialKnowledge((prev) =>
+                  prev.map((item, idx) =>
+                    idx === index ? event.target.value : item,
+                  ),
+                )
+              }
+              rows={2}
+            />
+            <button
+              className="ck-knowledge-remove"
+              type="button"
+              onClick={() => removeKnowledgeInput(index)}
+              title="Remove knowledge input"
+            >
+              x
+            </button>
+          </div>
+        ))}
+        <button
+          className="ck-small-button"
+          type="button"
+          onClick={addKnowledgeInput}
+        >
+          + Add knowledge
+        </button>
+        <div className="ck-hint-text">
+          Excalidraw rectangles for initial concept and knowledge are created
+          live while typing.
+        </div>
+      </div>
+
+      <div className="ck-agent-section">
+        <div className="ck-agent-subtitle">Actions</div>
+        <div className="ck-actions-grid">
+          {ACTIONS.map((operation) => (
+            <button
+              key={operation}
+              type="button"
+              className="ck-action-button"
+              disabled={!canRunOperations || busyOperation !== null}
+              onClick={() => runOperation(operation)}
+            >
+              {busyOperation === operation
+                ? `Running ${operation}...`
+                : OPERATION_LABELS[operation]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="ck-agent-section">
+        <div className="ck-agent-subtitle">Decision</div>
+        <div className="ck-decision-box">
+          {latestDecision || "Run an operation to see agent decisions."}
+        </div>
+        <div className="ck-accept-reject-row">
+          <button
+            type="button"
+            className="ck-small-button"
+            onClick={acceptSelectedNode}
+            disabled={!selectedNode?.generated}
+          >
+            Accept selected
+          </button>
+          <button
+            type="button"
+            className="ck-small-button"
+            onClick={rejectSelectedNode}
+            disabled={!selectedNode?.generated}
+          >
+            Reject selected
+          </button>
+        </div>
+      </div>
+
+      <div className="ck-agent-section">
+        <div className="ck-agent-subtitle">Nodes</div>
+        <div className="ck-node-list">
+          {nodes.map((node) => (
+            <button
+              key={node.id}
+              type="button"
+              className={`ck-node-item ${
+                selectedNodeId === node.id ? "is-selected" : ""
+              }`}
+              onClick={() => setSelectedNodeId(node.id)}
+            >
+              <span>{node.id}</span>
+              <span>{node.title}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="ck-agent-section">
+        <div className="ck-agent-subtitle">Agent dialogue</div>
+        <div className="ck-transcript">
+          {transcript.length === 0 ? (
+            <div className="ck-transcript-empty">
+              Concept and knowledge agent messages will appear here.
+            </div>
+          ) : (
+            transcript.map((message) => (
+              <div key={message.id} className="ck-transcript-line">
+                <strong>{message.speaker}</strong>: {message.content}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

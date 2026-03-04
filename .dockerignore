@@ -5,6 +5,9 @@
 !.npmrc
 !.prettierrc
 !nginx.conf
+!supervisord.conf
+!start.sh
+!backend/
 !excalidraw-app/
 !package.json
 !public/

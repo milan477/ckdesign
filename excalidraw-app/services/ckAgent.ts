@@ -201,38 +201,38 @@ const runRemoteOperation = async (
   let operateEndpointUnavailable = false;
   let operateResponse: Response | null = null;
 
-  try {
-    operateResponse = await fetch(`${base}/v1/ai/ck/operate`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-    });
-  } catch {
-    operateEndpointUnavailable = true;
-  }
+  // try {
+  //   operateResponse = await fetch(`${base}/v1/ai/ck/operate`, {
+  //     method: "POST",
+  //     headers: {
+  //       Accept: "application/json",
+  //       "Content-Type": "application/json",
+  //     },
+  //     body: JSON.stringify(input),
+  //   });
+  // } catch {
+  //   operateEndpointUnavailable = true;
+  // }
 
-  if (operateResponse) {
-    if (operateResponse.ok) {
-      const payload = (await operateResponse.json()) as unknown;
-      const normalized = normalizeRemoteResult(payload);
-      if (!normalized) {
-        throw new Error("Invalid response payload from /v1/ai/ck/operate.");
-      }
-      return normalized;
-    }
+  // if (operateResponse) {
+  //   if (operateResponse.ok) {
+  //     const payload = (await operateResponse.json()) as unknown;
+  //     const normalized = normalizeRemoteResult(payload);
+  //     if (!normalized) {
+  //       throw new Error("Invalid response payload from /v1/ai/ck/operate.");
+  //     }
+  //     return normalized;
+  //   }
 
-    if (isNotImplementedStatus(operateResponse.status)) {
-      operateEndpointUnavailable = true;
-    } else {
-      const message = await readResponseError(operateResponse);
-      throw new Error(
-        `Backend /v1/ai/ck/operate failed (${operateResponse.status}): ${message}`,
-      );
-    }
-  }
+  //   if (isNotImplementedStatus(operateResponse.status)) {
+  //     operateEndpointUnavailable = true;
+  //   } else {
+  //     const message = await readResponseError(operateResponse);
+  //     throw new Error(
+  //       `Backend /v1/ai/ck/operate failed (${operateResponse.status}): ${message}`,
+  //     );
+  //   }
+  // }
 
   if (input.operation === "CreateConcept") {
     const response = await fetch(`${base}/nodes/create-concept`, {

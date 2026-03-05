@@ -23,70 +23,84 @@ async def generate(node: NodeGenerateRequest):
 async def run_simulations(request: SimulationRequest):
     """Run simulations and return all generated results"""
 
-    print("Received simulation request:", request)
+    try:
+        print("Received simulation request:", request)
 
-    topic = request.topic or default["topic"]
-    initial_entry = (
-        request.initial_entry.model_dump()
-        if request.initial_entry
-        else default["initial_entry"]
-    )
-    knowledge_entries = (
-        [entry.model_dump() for entry in request.knowledge_entries]
-        if request.knowledge_entries
-        else default["knowledge_entries"]
-    )
-    iterations = request.iterations or default["iterations"]
-    simulations_count = request.simulations or 1
+        topic = request.topic or default["topic"]
+        initial_entry = (
+            request.initial_entry.model_dump()
+            if request.initial_entry
+            else default["initial_entry"]
+        )
+        knowledge_entries = (
+            [entry.model_dump() for entry in request.knowledge_entries]
+            if request.knowledge_entries
+            else default["knowledge_entries"]
+        )
+        iterations = request.iterations or default["iterations"]
+        simulations_count = request.simulations or 1
 
-    # Initialize CKAgent
-    agent = CKAgent()
+        # Initialize CKAgent
+        agent = CKAgent()
 
-    # Run simulations
-    simulations = []
-    for _ in range(simulations_count):
-        simulation = await agent.run_simulation(topic, initial_entry, knowledge_entries, iterations)
-        simulations.append(simulation)
+        # Run simulations
+        simulations = []
+        for _ in range(simulations_count):
+            simulation = await agent.run_simulation(topic, initial_entry, knowledge_entries, iterations)
+            simulations.append(simulation)
 
-    return {
-        "simulations": simulations
-    }
+        return {
+            "simulations": simulations
+        }
+
+    except Exception as e:
+        logger.error("Error in run_simulations: %s", str(e))
+        return {"error": str(e)}
+
 
 
 @router.post("/reorder", response_model=ReorderResponse)
 async def reorder_knowledge(request: ReorderRequest):
     """Reorder knowledge entries based on the current history"""
-    agent = CKAgent()
-    reordered_entries = await agent.reorder_knowledge_entries(request.topic, request.ck_history)
-    return {"reordered_knowledge": reordered_entries}
+    try:
+        agent = CKAgent()
+        reordered_entries = await agent.reorder_knowledge_entries(request.topic, request.ck_history)
+        return {"reordered_knowledge": reordered_entries}
+    except Exception as e:
+        logger.error("Error in reorder_knowledge: %s", str(e))
+        return {"error": str(e)}
 
 
 @router.post("/create-concept", response_model=CreateConceptResponse)
 async def create_concept(request: CreateConceptRequest):
     """Create a single concept by running one K->C operation."""
-    agent = CKAgent()
-    history = [entry.model_dump() for entry in request.ck_history]
-    title, desc = agent.k_to_c(history, request.topic)
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        title, desc = agent.k_to_c(history, request.topic)
 
-    next_concept_index = (
-        sum(1 for entry in request.ck_history if entry.type.lower() == "concept") + 1
-    )
-    source_knowledge_ids = [
-        entry.id for entry in request.ck_history if entry.type.lower() == "knowledge"
-    ]
+        next_concept_index = (
+            sum(1 for entry in request.ck_history if entry.type.lower() == "concept") + 1
+        )
+        source_knowledge_ids = [
+            entry.id for entry in request.ck_history if entry.type.lower() == "knowledge"
+        ]
 
-    response_payload = {
-        "concept": {
-            "id": f"C{next_concept_index}",
-            "type": "concept",
-            "title": title,
-            "desc": desc,
-            "operation_rationale": "Generated via single K->C (k_to_c) operation.",
-        },
-        "source_knowledge_ids": source_knowledge_ids,
-    }
-    logger.info("create_concept response: %s", response_payload)
-    return response_payload
+        response_payload = {
+            "concept": {
+                "id": f"C{next_concept_index}",
+                "type": "concept",
+                "title": title,
+                "desc": desc,
+                "operation_rationale": "Generated via single K->C (k_to_c) operation.",
+            },
+            "source_knowledge_ids": source_knowledge_ids,
+        }
+        logger.info("create_concept response: %s", response_payload)
+        return response_payload
+    except Exception as e:
+        logger.error("Error in create_concept: %s", str(e))
+        return {"error": str(e)}
 
 
 default = {

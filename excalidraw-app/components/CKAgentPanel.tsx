@@ -700,12 +700,18 @@ export const CKAgentPanel = ({
       return;
     }
 
-    const focusNode =
-      (selectedNodeId
+    const selectedFocusNode =
+      selectedNodeId
         ? currentNodes.find((node) => node.id === selectedNodeId) || null
-        : null) ||
-      [...currentNodes].reverse().find((node) => node.type === "concept") ||
-      null;
+        : null;
+    const focusNode =
+      operation === "ExpandConcept"
+        ? (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
+          [...currentNodes].reverse().find((node) => node.type === "concept") ||
+          null
+        : selectedFocusNode ||
+          [...currentNodes].reverse().find((node) => node.type === "concept") ||
+          null;
     if (!focusNode) {
       toast("Select a node or initialize the session.");
       return;
@@ -746,48 +752,62 @@ export const CKAgentPanel = ({
         );
       }
 
-      if (result.generatedEntry) {
+      const generatedEntries = result.generatedEntries?.length
+        ? result.generatedEntries
+        : result.generatedEntry
+        ? [result.generatedEntry]
+        : [];
+
+      if (generatedEntries.length) {
         const knowledgeNodeById = new Map(
           currentNodes
             .filter((node) => node.type === "knowledge")
             .map((node) => [node.id, node]),
         );
-        const sourceKnowledgeIds =
-          operation === "CreateConcept"
-            ? Array.from(
-                new Set(result.generatedEntry.sourceKnowledgeIds || []),
-              ).filter((id) => knowledgeNodeById.has(id))
-            : [];
-        const sourceKnowledgeNodes = sourceKnowledgeIds
-          .map((id) => knowledgeNodeById.get(id))
-          .filter((node): node is CKCanvasNode => !!node);
-        const averageY =
-          sourceKnowledgeNodes.length > 0
-            ? sourceKnowledgeNodes.reduce((sum, node) => sum + node.y, 0) /
-              sourceKnowledgeNodes.length
-            : undefined;
-        const generated = makeGeneratedNode(
-          result.generatedEntry.type,
-          focusNode,
-          result.generatedEntry.title,
-          result.generatedEntry.desc,
-          result.generatedEntry.operationRationale,
-          sourceKnowledgeIds.length
-            ? {
-                id: result.generatedEntry.id,
-                sourceParentIds: sourceKnowledgeIds,
-                x: getColumnX(result.generatedEntry.type),
-                y: averageY,
-              }
-            : result.generatedEntry.id
-            ? { id: result.generatedEntry.id }
-            : undefined,
+        const generatedNodes = generatedEntries.map((entry) => {
+          const sourceKnowledgeIds =
+            operation === "CreateConcept"
+              ? Array.from(new Set(entry.sourceKnowledgeIds || [])).filter(
+                  (id) => knowledgeNodeById.has(id),
+                )
+              : [];
+          const sourceKnowledgeNodes = sourceKnowledgeIds
+            .map((id) => knowledgeNodeById.get(id))
+            .filter((node): node is CKCanvasNode => !!node);
+          const averageY =
+            sourceKnowledgeNodes.length > 0
+              ? sourceKnowledgeNodes.reduce((sum, node) => sum + node.y, 0) /
+                sourceKnowledgeNodes.length
+              : undefined;
+
+          return makeGeneratedNode(
+            entry.type,
+            focusNode,
+            entry.title,
+            entry.desc,
+            entry.operationRationale,
+            sourceKnowledgeIds.length
+              ? {
+                  id: entry.id,
+                  sourceParentIds: sourceKnowledgeIds,
+                  x: getColumnX(entry.type),
+                  y: averageY,
+                }
+              : entry.id
+              ? { id: entry.id }
+              : undefined,
+          );
+        });
+
+        setNodes((prev) => [...prev, ...generatedNodes]);
+        nodesRef.current = [...currentNodes, ...generatedNodes];
+        setSelectedNodeId(generatedNodes[generatedNodes.length - 1].id);
+        setLatestDecision(
+          generatedNodes.length > 1
+            ? `${operation} generated ${generatedNodes.length} concepts.`
+            : generatedNodes[0].operationRationale,
         );
-        setNodes((prev) => [...prev, generated]);
-        nodesRef.current = [...currentNodes, generated];
-        setSelectedNodeId(generated.id);
-        setLatestDecision(result.generatedEntry.operationRationale);
-        addNodesToCanvas([generated], currentNodes);
+        addNodesToCanvas(generatedNodes, currentNodes);
       }
     } catch (error) {
       toast(

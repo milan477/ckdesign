@@ -1,5 +1,7 @@
 from openai import OpenAI
 import json
+from backend.app.services.nodes_generation.concept_agent import ConceptAgent
+from backend.app.services.nodes_generation.knowledge_agent import KnowledgeAgent
 from backend.app.services.nodes_generation.prompt_engine import CKPromptEngine
 from backend.app.services.nodes_generation.tool_engine import CKToolEngine
 from backend.app.services.ai.ai import OpenAIClient
@@ -10,12 +12,14 @@ from backend.app.services.nodes_specification.CK_nodes import CKElement, CKType,
 async def generate_nodes(description: str):
     return {"node_id": "1", "type": "concept", "description": description}
 
+
 class CKAgent:
     def __init__(self, llm_model: str = "gpt-4.1"):
         self.ai = OpenAIClient(llm_model=llm_model)
 
         self.client = self.ai.client
         self.llm_model = self.ai.llm_model
+        self.concept_agent = ConceptAgent(llm_model=self.llm_model, ai_client=self.ai)
 
     @staticmethod
     def _normalize_ck_type(type_value):
@@ -298,47 +302,16 @@ class CKAgent:
         return final_title, final_desc
 
     def k_to_c(self, ck_history, topic):
-        """Knowledge to Concept operation"""
-        prompt_k_to_c = CKPromptEngine.knowledge_to_concept(topic, ck_history)
+        """Compatibility wrapper. Delegates to ConceptAgent.CreateConcept."""
+        return self.concept_agent.CreateConcept(ck_history, topic)
 
-        title_prmpt = CKPromptEngine.TITLE_TRANSFORM
-        desc_prmpt = CKPromptEngine.DESC_TRANSFORM
-
-        response = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
-                {"role": "user", "content": prompt_k_to_c}
-            ],
-            temperature=1
+    def expand_concept(self, ck_history, topic, focus_entry_id=None):
+        """Expand a concept into 2-3 child concepts."""
+        return self.concept_agent.ExpandConcept(
+            ck_history,
+            topic,
+            focus_entry_id=focus_entry_id,
         )
-
-        response_title = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
-                {"role": "user", "content": prompt_k_to_c},
-                {"role": "assistant", "content": response.choices[0].message.content},
-                {"role": "user", "content": title_prmpt}
-            ],
-            temperature=0
-        )
-
-        response_desc = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
-                {"role": "user", "content": prompt_k_to_c},
-                {"role": "assistant", "content": response.choices[0].message.content},
-                {"role": "user", "content": desc_prmpt}
-            ],
-            temperature=0
-        )
-
-        final_title = response_title.choices[0].message.content
-        final_desc = response_desc.choices[0].message.content
-
-        return final_title, final_desc
 
     def get_k(self, topic):
         """Initialize knowledge entries"""

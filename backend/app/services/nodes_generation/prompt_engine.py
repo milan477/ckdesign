@@ -151,6 +151,46 @@ Use the CK history to reason about what new concepts, ideas, or possibilities co
         """
 
     @staticmethod
+    def expand_concept(topic: str, ck_history: str, focus_concept: str) -> str:
+        """Expand a selected concept into 2-3 child concepts (C-->C)."""
+        return f"""
+You are an AI simulation with the goal of doing a C-->C operation from the C-K Theory.
+The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
+
+Knowledge Space (K) - This is the space where propositions have a logical status, meaning they can be true or false.
+Concept Space (C) - This space consists of propositions that do not yet have a logical status in K.
+
+Your task:
+1. Focus on the selected concept shown below.
+2. Expand that concept into 2 or 3 new child concepts.
+3. Each child concept must stay in Concept Space (not validated/refuted yet).
+4. Make each child direction meaningfully different from the others.
+
+CK history:
+{ck_history}
+
+Selected parent concept:
+{focus_concept}
+
+Return valid JSON only in this exact shape:
+{{
+  "concepts": [
+    {{
+      "title": "string",
+      "desc": "2-3 sentence concept description",
+      "operation_rationale": "2-3 sentence rationale for why this is a valid C-->C expansion"
+    }}
+  ]
+}}
+
+Rules:
+- Return exactly 2 or 3 concepts.
+- No markdown.
+- No trailing commas.
+- No text outside the JSON object.
+        """
+
+    @staticmethod
     def initialize_knowledge_entries(topic: str) -> str:
         """Prompt to generate initial knowledge entries based on topic"""
         return f"""

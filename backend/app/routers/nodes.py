@@ -1,7 +1,20 @@
 import logging
+import re
 
 from fastapi import APIRouter
-from backend.app.schemas.node import CKEntry, NodeGenerateRequest, NodeOut, SimulationRequest, SimulationResponse, ReorderRequest, ReorderResponse, CreateConceptRequest, CreateConceptResponse
+from backend.app.schemas.node import (
+    CKEntry,
+    CreateConceptRequest,
+    CreateConceptResponse,
+    ExpandConceptRequest,
+    ExpandConceptResponse,
+    NodeGenerateRequest,
+    NodeOut,
+    ReorderRequest,
+    ReorderResponse,
+    SimulationRequest,
+    SimulationResponse,
+)
 from backend.app.services.nodes_generation.node_generator import generate_nodes, CKAgent
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -100,6 +113,49 @@ async def create_concept(request: CreateConceptRequest):
         return response_payload
     except Exception as e:
         logger.error("Error in create_concept: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/expand-concept", response_model=ExpandConceptResponse)
+async def expand_concept(request: ExpandConceptRequest):
+    """Expand a selected concept into 2-3 child concepts via C->C operation."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        parent_concept_id, expanded = agent.expand_concept(
+            history,
+            request.topic,
+            focus_entry_id=request.focus_entry_id,
+        )
+
+        max_concept_index = 0
+        for entry in request.ck_history:
+            if entry.type.lower() != "concept":
+                continue
+            match = re.match(r"^C(\d+)$", entry.id.strip(), flags=re.IGNORECASE)
+            if match:
+                max_concept_index = max(max_concept_index, int(match.group(1)))
+
+        concepts = []
+        for i, concept in enumerate(expanded):
+            concepts.append(
+                {
+                    "id": f"C{max_concept_index + i + 1}",
+                    "type": "concept",
+                    "title": concept["title"],
+                    "desc": concept["desc"],
+                    "operation_rationale": concept["operation_rationale"],
+                }
+            )
+
+        response_payload = {
+            "parent_concept_id": parent_concept_id,
+            "concepts": concepts,
+        }
+        logger.info("expand_concept response: %s", response_payload)
+        return response_payload
+    except Exception as e:
+        logger.error("Error in expand_concept: %s", str(e))
         return {"error": str(e)}
 
 

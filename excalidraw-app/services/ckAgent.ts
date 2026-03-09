@@ -32,15 +32,18 @@ export interface CKOperationInput {
   history: CKEntryContext[];
 }
 
+export interface CKGeneratedEntry {
+  id?: string;
+  type: CKNodeType;
+  title: string;
+  desc: string;
+  operationRationale: string;
+  sourceKnowledgeIds?: string[];
+}
+
 export interface CKOperationResult {
-  generatedEntry?: {
-    id?: string;
-    type: CKNodeType;
-    title: string;
-    desc: string;
-    operationRationale: string;
-    sourceKnowledgeIds?: string[];
-  };
+  generatedEntry?: CKGeneratedEntry;
+  generatedEntries?: CKGeneratedEntry[];
   reorderedIds?: string[];
   noveltyDecision?: {
     isNovel: boolean;
@@ -73,6 +76,33 @@ const parseConceptDescriptionPayload = (text: string) => {
   const parsedDesc = descMatch?.[1]?.trim() || "";
 
   return { parsedTitle, parsedDesc };
+};
+
+const normalizeGeneratedEntry = (
+  entry: Record<string, unknown>,
+): CKGeneratedEntry | undefined => {
+  if (
+    (entry.type !== "concept" && entry.type !== "knowledge") ||
+    typeof entry.title !== "string" ||
+    typeof entry.desc !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    id: typeof entry.id === "string" ? entry.id : undefined,
+    type: entry.type,
+    title: entry.title,
+    desc: entry.desc,
+    operationRationale:
+      typeof entry.operationRationale === "string"
+        ? entry.operationRationale
+        : "Generated via CK operation.",
+    sourceKnowledgeIds: Array.isArray(entry.sourceKnowledgeIds)
+      ? entry.sourceKnowledgeIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : undefined,
+  };
 };
 
 const toBackendHistory = (history: CKEntryContext[]) =>
@@ -130,29 +160,21 @@ const normalizeRemoteResult = (payload: unknown): CKOperationResult | null => {
     typeof data.generatedEntry === "object" &&
     data.generatedEntry !== null
       ? (() => {
-          const entry = data.generatedEntry as Record<string, unknown>;
-          if (
-            (entry.type !== "concept" && entry.type !== "knowledge") ||
-            typeof entry.title !== "string" ||
-            typeof entry.desc !== "string" ||
-            typeof entry.operationRationale !== "string"
-          ) {
-            return undefined;
-          }
-          return {
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            type: entry.type,
-            title: entry.title,
-            desc: entry.desc,
-            operationRationale: entry.operationRationale,
-            sourceKnowledgeIds: Array.isArray(entry.sourceKnowledgeIds)
-              ? entry.sourceKnowledgeIds.filter(
-                  (id): id is string => typeof id === "string",
-                )
-              : undefined,
-          } as CKOperationResult["generatedEntry"];
+          return normalizeGeneratedEntry(
+            data.generatedEntry as Record<string, unknown>,
+          );
         })()
       : undefined;
+
+  const generatedEntries = Array.isArray(data.generatedEntries)
+    ? data.generatedEntries
+        .map((entry) =>
+          entry && typeof entry === "object"
+            ? normalizeGeneratedEntry(entry as Record<string, unknown>)
+            : undefined,
+        )
+        .filter((entry): entry is CKGeneratedEntry => !!entry)
+    : undefined;
 
   const reorderedIds = Array.isArray(data.reorderedIds)
     ? data.reorderedIds.filter((id): id is string => typeof id === "string")
@@ -179,6 +201,7 @@ const normalizeRemoteResult = (payload: unknown): CKOperationResult | null => {
 
   if (
     !generatedEntry &&
+    !(generatedEntries && generatedEntries.length) &&
     !reorderedIds &&
     !noveltyDecision &&
     dialogue.length === 0
@@ -188,6 +211,7 @@ const normalizeRemoteResult = (payload: unknown): CKOperationResult | null => {
 
   return {
     generatedEntry,
+    generatedEntries,
     reorderedIds,
     noveltyDecision,
     dialogue,
@@ -299,6 +323,77 @@ const runRemoteOperation = async (
             (id) => typeof id === "string",
           ) || [],
       },
+      dialogue: [],
+    };
+  }
+
+  if (input.operation === "ExpandConcept") {
+    const response = await fetch(`${base}/nodes/expand-concept`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+        focus_entry_id: input.focusEntry?.id ?? null,
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/expand-concept failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      concepts?: Array<{
+        id?: string;
+        type?: string;
+        title?: string;
+        desc?: string;
+        operation_rationale?: string;
+      }>;
+    };
+
+    const generatedEntries: CKGeneratedEntry[] = [];
+    for (const concept of payload.concepts || []) {
+      if (
+        concept.type !== "concept" ||
+        typeof concept.title !== "string" ||
+        typeof concept.desc !== "string"
+      ) {
+        continue;
+      }
+
+      const parsed = parseConceptDescriptionPayload(concept.desc);
+      const normalizedTitle = stripConceptIdPrefix(
+        parsed.parsedTitle || concept.title,
+      );
+      const normalizedDesc = parsed.parsedDesc || concept.desc;
+
+      generatedEntries.push({
+        id: concept.id,
+        type: "concept",
+        title: normalizedTitle,
+        desc: normalizedDesc,
+        operationRationale:
+          concept.operation_rationale ||
+          "Generated via ExpandConcept (C->C) operation.",
+      });
+    }
+
+    if (generatedEntries.length < 2) {
+      throw new Error("Invalid response payload from /nodes/expand-concept.");
+    }
+
+    return {
+      generatedEntries,
       dialogue: [],
     };
   }

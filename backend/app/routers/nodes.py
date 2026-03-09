@@ -12,6 +12,8 @@ from backend.app.schemas.node import (
     DecideNovelConceptResponse,
     ExpandConceptRequest,
     ExpandConceptResponse,
+    ExpandKnowledgeRequest,
+    ExpandKnowledgeResponse,
     NodeGenerateRequest,
     NodeOut,
     ReorderRequest,
@@ -193,6 +195,49 @@ async def expand_concept(request: ExpandConceptRequest):
         return response_payload
     except Exception as e:
         logger.error("Error in expand_concept: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/expand-knowledge", response_model=ExpandKnowledgeResponse)
+async def expand_knowledge(request: ExpandKnowledgeRequest):
+    """Expand a selected knowledge entry into 2-3 child knowledge entries via K->K operation."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        parent_knowledge_id, expanded = agent.expand_knowledge(
+            history,
+            request.topic,
+            focus_entry_id=request.focus_entry_id,
+        )
+
+        max_knowledge_index = 0
+        for entry in request.ck_history:
+            if entry.type.lower() != "knowledge":
+                continue
+            match = re.match(r"^K(\d+)$", entry.id.strip(), flags=re.IGNORECASE)
+            if match:
+                max_knowledge_index = max(max_knowledge_index, int(match.group(1)))
+
+        knowledges = []
+        for i, knowledge in enumerate(expanded):
+            knowledges.append(
+                {
+                    "id": f"K{max_knowledge_index + i + 1}",
+                    "type": "knowledge",
+                    "title": knowledge["title"],
+                    "desc": knowledge["desc"],
+                    "operation_rationale": knowledge["operation_rationale"],
+                }
+            )
+
+        response_payload = {
+            "parent_knowledge_id": parent_knowledge_id,
+            "knowledges": knowledges,
+        }
+        logger.info("expand_knowledge response: %s", response_payload)
+        return response_payload
+    except Exception as e:
+        logger.error("Error in expand_knowledge: %s", str(e))
         return {"error": str(e)}
 
 

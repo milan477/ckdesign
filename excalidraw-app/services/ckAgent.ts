@@ -599,7 +599,67 @@ const runRemoteOperation = async (
   }
 
   if (input.operation === "ExpandKnowledge") {
-    throw getNotImplementedError(input.operation);
+    const response = await fetch(`${base}/nodes/expand-knowledge`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+        focus_entry_id: input.focusEntry?.id ?? null,
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/expand-knowledge failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      knowledges?: Array<{
+        id?: string;
+        type?: string;
+        title?: string;
+        desc?: string;
+        operation_rationale?: string;
+      }>;
+    };
+
+    const generatedEntries: CKGeneratedEntry[] = [];
+    for (const knowledge of payload.knowledges || []) {
+      if (
+        knowledge.type !== "knowledge" ||
+        typeof knowledge.title !== "string" ||
+        typeof knowledge.desc !== "string"
+      ) {
+        continue;
+      }
+      generatedEntries.push({
+        id: knowledge.id,
+        type: "knowledge",
+        title: knowledge.title,
+        desc: knowledge.desc,
+        operationRationale:
+          knowledge.operation_rationale ||
+          "Generated via ExpandKnowledge (K->K) operation.",
+      });
+    }
+
+    if (generatedEntries.length < 2) {
+      throw new Error("Invalid response payload from /nodes/expand-knowledge.");
+    }
+
+    return {
+      generatedEntries,
+      dialogue: [],
+    };
   }
 
   if (operateEndpointUnavailable) {

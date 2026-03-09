@@ -55,13 +55,13 @@ type TranscriptItem = CKAgentMessage & {
 
 const ACTIONS: readonly CKOperation[] = [
   "CreateConcept",
+  "CreateKnowledge",
   "ExpandConcept",
   "ExpandKnowledge",
   "ReorderConcept",
-  "DecideNovelConcept",
-  "CreateKnowledge",
   "ReorderKnowledge",
   "ValidateConcept",
+  "DecideNovelConcept",
 ];
 
 const OPERATION_LABELS: Record<CKOperation, string> = {
@@ -799,16 +799,31 @@ export const CKAgentPanel = ({
       selectedNodeId
         ? currentNodes.find((node) => node.id === selectedNodeId) || null
         : null;
-    const focusNode =
+
+    const latestConceptNode =
+      [...currentNodes].reverse().find((node) => node.type === "concept") ||
+      null;
+    const latestKnowledgeNode =
+      [...currentNodes].reverse().find((node) => node.type === "knowledge") ||
+      null;
+
+    let focusNode: CKCanvasNode | null;
+    if (
       operation === "ExpandConcept" ||
       operation === "DecideNovelConcept" ||
       operation === "CreateKnowledge"
-        ? (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
-          [...currentNodes].reverse().find((node) => node.type === "concept") ||
-          null
-        : selectedFocusNode ||
-          [...currentNodes].reverse().find((node) => node.type === "concept") ||
-          null;
+    ) {
+      focusNode =
+        (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
+        latestConceptNode;
+    } else if (operation === "ExpandKnowledge") {
+      focusNode =
+        (selectedFocusNode?.type === "knowledge" ? selectedFocusNode : null) ||
+        latestKnowledgeNode;
+    } else {
+      focusNode = selectedFocusNode || latestConceptNode || latestKnowledgeNode;
+    }
+
     if (!focusNode) {
       toast("Select a node or initialize the session.");
       return;
@@ -902,9 +917,11 @@ export const CKAgentPanel = ({
         setNodes((prev) => [...prev, ...generatedNodes]);
         nodesRef.current = [...currentNodes, ...generatedNodes];
         setSelectedNodeId(generatedNodes[generatedNodes.length - 1].id);
+        const resultLabel =
+          generatedNodes[0].type === "knowledge" ? "knowledge nodes" : "concepts";
         setLatestDecision(
           generatedNodes.length > 1
-            ? `${operation} generated ${generatedNodes.length} concepts.`
+            ? `${operation} generated ${generatedNodes.length} ${resultLabel}.`
             : generatedNodes[0].operationRationale,
         );
         addNodesToCanvas(generatedNodes, currentNodes);

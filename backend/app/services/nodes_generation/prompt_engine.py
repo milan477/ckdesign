@@ -265,6 +265,46 @@ Return a direct answer that can be transformed into:
         """
 
     @staticmethod
+    def expand_knowledge(topic: str, ck_history: str, focus_knowledge: str) -> str:
+        """Expand a selected knowledge entry into 2-3 child knowledge entries (K-->K)."""
+        return f"""
+You are an AI simulation with the goal of doing a K-->K operation from the C-K Theory.
+The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
+
+Knowledge Space (K) - validated propositions and actionable facts with logical status.
+Concept Space (C) - undecidable propositions not yet validated in K.
+
+Your task:
+1. Focus on the selected knowledge entry shown below.
+2. Expand that knowledge into 2 or 3 new child knowledge entries.
+3. Each child entry must stay in Knowledge Space (specific, testable, and practically useful).
+4. Make each child direction meaningfully different from the others.
+
+CK history:
+{ck_history}
+
+Selected parent knowledge:
+{focus_knowledge}
+
+Return valid JSON only in this exact shape:
+{{
+  "knowledges": [
+    {{
+      "title": "string",
+      "desc": "2-3 sentence knowledge description",
+      "operation_rationale": "2-3 sentence rationale for why this is a valid K-->K expansion"
+    }}
+  ]
+}}
+
+Rules:
+- Return exactly 2 or 3 knowledge entries.
+- No markdown.
+- No trailing commas.
+- No text outside the JSON object.
+        """
+
+    @staticmethod
     def initialize_knowledge_entries(topic: str) -> str:
         """Prompt to generate initial knowledge entries based on topic"""
         return f"""

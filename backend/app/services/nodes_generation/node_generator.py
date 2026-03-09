@@ -326,6 +326,14 @@ class CKAgent:
             focus_entry_id=focus_entry_id,
         )
 
+    def expand_knowledge(self, ck_history, topic, focus_entry_id=None):
+        """Expand one knowledge entry into 2-3 child knowledge entries."""
+        return self.knowledge_agent.ExpandKnowledge(
+            ck_history,
+            topic,
+            focus_entry_id=focus_entry_id,
+        )
+
     def get_k(self, topic):
         """Initialize knowledge entries"""
 

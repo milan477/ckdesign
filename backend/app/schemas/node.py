@@ -50,6 +50,17 @@ class CreateConceptResponse(BaseModel):
     source_knowledge_ids: List[str]
 
 
+class CreateKnowledgeRequest(BaseModel):
+    topic: str
+    ck_history: List[CKEntry]
+    focus_entry_id: Optional[str] = None
+
+
+class CreateKnowledgeResponse(BaseModel):
+    knowledge: CKEntry
+    source_concept_id: str
+
+
 class ExpandConceptRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]

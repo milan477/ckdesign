@@ -20,6 +20,7 @@ class CKAgent:
         self.client = self.ai.client
         self.llm_model = self.ai.llm_model
         self.concept_agent = ConceptAgent(llm_model=self.llm_model, ai_client=self.ai)
+        self.knowledge_agent = KnowledgeAgent(llm_model=self.llm_model, ai_client=self.ai)
 
     @staticmethod
     def _normalize_ck_type(type_value):
@@ -316,6 +317,14 @@ class CKAgent:
     def decide_novel_concept(self, ck_history, topic):
         """Choose the best concept using novelty/feasibility/usefulness/clarity."""
         return self.concept_agent.DecideNovelConcept(ck_history, topic)
+
+    def create_knowledge(self, ck_history, topic, focus_entry_id=None):
+        """Create one knowledge entry from a selected concept."""
+        return self.knowledge_agent.CreateKnowledge(
+            ck_history,
+            topic,
+            focus_entry_id=focus_entry_id,
+        )
 
     def get_k(self, topic):
         """Initialize knowledge entries"""

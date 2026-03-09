@@ -234,6 +234,37 @@ Rules:
         """
 
     @staticmethod
+    def create_knowledge_from_concept(
+        topic: str,
+        ck_history: str,
+        focus_concept: str,
+    ) -> str:
+        """Generate one new knowledge entry from the selected concept (C-->K)."""
+        return f"""
+You are an AI simulation with the goal of doing a C-->K operation from the C-K Theory.
+The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
+
+Knowledge Space (K) - propositions with logical status (true/false) and actionable facts.
+Concept Space (C) - open propositions not yet validated in K.
+
+Your task:
+1. Focus on the selected concept below.
+2. Derive one high-value new knowledge entry from that concept.
+3. The knowledge entry should improve decision quality for future concept exploration.
+4. Keep it specific, practical, and consistent with the topic.
+
+CK history:
+{ck_history}
+
+Selected parent concept:
+{focus_concept}
+
+Return a direct answer that can be transformed into:
+- one knowledge title
+- one 2-3 sentence knowledge description
+        """
+
+    @staticmethod
     def initialize_knowledge_entries(topic: str) -> str:
         """Prompt to generate initial knowledge entries based on topic"""
         return f"""

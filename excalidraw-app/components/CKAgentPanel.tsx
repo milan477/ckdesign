@@ -56,6 +56,7 @@ type TranscriptItem = CKAgentMessage & {
 const ACTIONS: readonly CKOperation[] = [
   "CreateConcept",
   "ExpandConcept",
+  "ExpandKnowledge",
   "ReorderConcept",
   "DecideNovelConcept",
   "CreateKnowledge",
@@ -66,6 +67,7 @@ const ACTIONS: readonly CKOperation[] = [
 const OPERATION_LABELS: Record<CKOperation, string> = {
   CreateConcept: "CreateConcept()",
   ExpandConcept: "ExpandConcept()",
+  ExpandKnowledge: "ExpandKnowledge()",
   ReorderConcept: "ReorderConcept()",
   DecideNovelConcept: "DecideNovelConcept()",
   CreateKnowledge: "CreateKnowledge()",
@@ -798,7 +800,9 @@ export const CKAgentPanel = ({
         ? currentNodes.find((node) => node.id === selectedNodeId) || null
         : null;
     const focusNode =
-      operation === "ExpandConcept" || operation === "DecideNovelConcept"
+      operation === "ExpandConcept" ||
+      operation === "DecideNovelConcept" ||
+      operation === "CreateKnowledge"
         ? (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
           [...currentNodes].reverse().find((node) => node.type === "concept") ||
           null

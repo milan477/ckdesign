@@ -3,6 +3,7 @@ export type CKNodeType = "concept" | "knowledge";
 export type CKOperation =
   | "CreateConcept"
   | "ExpandConcept"
+  | "ExpandKnowledge"
   | "ReorderConcept"
   | "DecideNovelConcept"
   | "CreateKnowledge"
@@ -358,6 +359,64 @@ const runRemoteOperation = async (
     };
   }
 
+  if (input.operation === "CreateKnowledge") {
+    const response = await fetch(`${base}/nodes/create-knowledge`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+        focus_entry_id: input.focusEntry?.id ?? null,
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/create-knowledge failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      knowledge?: {
+        id?: string;
+        type?: string;
+        title?: string;
+        desc?: string;
+        operation_rationale?: string;
+      };
+      source_concept_id?: string;
+    };
+
+    if (
+      !payload.knowledge ||
+      payload.knowledge.type !== "knowledge" ||
+      typeof payload.knowledge.title !== "string" ||
+      typeof payload.knowledge.desc !== "string"
+    ) {
+      throw new Error("Invalid response payload from /nodes/create-knowledge.");
+    }
+
+    return {
+      generatedEntry: {
+        id: payload.knowledge.id,
+        type: "knowledge",
+        title: payload.knowledge.title,
+        desc: payload.knowledge.desc,
+        operationRationale:
+          payload.knowledge.operation_rationale ||
+          "Generated via single C->K (CreateKnowledge) operation.",
+      },
+      dialogue: [],
+    };
+  }
+
   if (input.operation === "ExpandConcept") {
     const response = await fetch(`${base}/nodes/expand-concept`, {
       method: "POST",
@@ -537,6 +596,10 @@ const runRemoteOperation = async (
       reorderedIds,
       dialogue: [],
     };
+  }
+
+  if (input.operation === "ExpandKnowledge") {
+    throw getNotImplementedError(input.operation);
   }
 
   if (operateEndpointUnavailable) {

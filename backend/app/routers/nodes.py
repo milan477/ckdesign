@@ -6,6 +6,8 @@ from backend.app.schemas.node import (
     CKEntry,
     CreateConceptRequest,
     CreateConceptResponse,
+    CreateKnowledgeRequest,
+    CreateKnowledgeResponse,
     DecideNovelConceptRequest,
     DecideNovelConceptResponse,
     ExpandConceptRequest,
@@ -115,6 +117,39 @@ async def create_concept(request: CreateConceptRequest):
         return response_payload
     except Exception as e:
         logger.error("Error in create_concept: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/create-knowledge", response_model=CreateKnowledgeResponse)
+async def create_knowledge(request: CreateKnowledgeRequest):
+    """Create a single knowledge entry by running one C->K operation."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        source_concept_id, title, desc = agent.create_knowledge(
+            history,
+            request.topic,
+            focus_entry_id=request.focus_entry_id,
+        )
+
+        next_knowledge_index = (
+            sum(1 for entry in request.ck_history if entry.type.lower() == "knowledge") + 1
+        )
+
+        response_payload = {
+            "knowledge": {
+                "id": f"K{next_knowledge_index}",
+                "type": "knowledge",
+                "title": title,
+                "desc": desc,
+                "operation_rationale": "Generated via single C->K (CreateKnowledge) operation.",
+            },
+            "source_concept_id": source_concept_id,
+        }
+        logger.info("create_knowledge response: %s", response_payload)
+        return response_payload
+    except Exception as e:
+        logger.error("Error in create_knowledge: %s", str(e))
         return {"error": str(e)}
 
 

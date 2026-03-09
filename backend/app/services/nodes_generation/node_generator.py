@@ -313,6 +313,10 @@ class CKAgent:
             focus_entry_id=focus_entry_id,
         )
 
+    def decide_novel_concept(self, ck_history, topic):
+        """Choose the best concept using novelty/feasibility/usefulness/clarity."""
+        return self.concept_agent.DecideNovelConcept(ck_history, topic)
+
     def get_k(self, topic):
         """Initialize knowledge entries"""
 

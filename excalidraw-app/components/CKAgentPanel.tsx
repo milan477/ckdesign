@@ -29,6 +29,9 @@ const MAX_LABEL_LINE_CHARS = 32;
 const LABEL_LINE_HEIGHT_ESTIMATE = 23;
 const LABEL_VERTICAL_PADDING = 36;
 const COLUMN_DIVIDER_ID = "ck-column-divider";
+const NOVEL_MARKER_SIZE = 120;
+const NOVEL_MARKER_OFFSET_X = 70;
+const NOVEL_MARKER_OFFSET_Y = 90;
 
 type NodeStatus = "pending" | "accepted";
 
@@ -259,6 +262,8 @@ export const CKAgentPanel = ({
   const childCounterRef = useRef<Record<string, number>>({});
   const transcriptCounterRef = useRef(1);
   const nodesRef = useRef<CKCanvasNode[]>([]);
+  const novelConceptIdRef = useRef<string | null>(null);
+  const novelMarkerElementIdRef = useRef<string | null>(null);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -337,6 +342,12 @@ export const CKAgentPanel = ({
     const pruned = sourceNodes.filter(
       (node) => !node.generated || aliveElementIds.has(node.elementId),
     );
+    if (
+      novelConceptIdRef.current &&
+      !pruned.some((node) => node.id === novelConceptIdRef.current)
+    ) {
+      clearNovelMarkerFromCanvas();
+    }
 
     if (pruned.length !== sourceNodes.length) {
       setNodes(pruned);
@@ -355,6 +366,76 @@ export const CKAgentPanel = ({
     }
   };
 
+  function clearNovelMarkerFromCanvas() {
+    const markerId = novelMarkerElementIdRef.current;
+    if (!excalidrawAPI || !markerId) {
+      novelConceptIdRef.current = null;
+      novelMarkerElementIdRef.current = null;
+      return;
+    }
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const updatedElements = currentElements.map((element) =>
+      element.id === markerId ? newElementWith(element, { isDeleted: true }) : element,
+    );
+    excalidrawAPI.updateScene({ elements: updatedElements });
+    novelConceptIdRef.current = null;
+    novelMarkerElementIdRef.current = null;
+  }
+
+  function markNovelConceptOnCanvas(conceptId: string) {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const targetNode = nodesRef.current.find(
+      (node) => node.id === conceptId && node.type === "concept",
+    );
+    if (!targetNode) {
+      toast(`Could not find concept ${conceptId} on canvas.`);
+      return;
+    }
+
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const updatedElements = [...currentElements];
+
+    if (novelMarkerElementIdRef.current) {
+      for (let i = 0; i < updatedElements.length; i++) {
+        if (updatedElements[i].id === novelMarkerElementIdRef.current) {
+          updatedElements[i] = newElementWith(updatedElements[i], { isDeleted: true });
+          break;
+        }
+      }
+    }
+
+    const liveNodeElement = currentElements.find(
+      (element) => element.id === targetNode.elementId && !element.isDeleted,
+    );
+    const markerX = (liveNodeElement?.x ?? targetNode.x) - NOVEL_MARKER_OFFSET_X;
+    const markerY = (liveNodeElement?.y ?? targetNode.y) - NOVEL_MARKER_OFFSET_Y;
+    const markerId = nextElementId("novel-star");
+
+    const star = convertToExcalidrawElements(
+      [
+        {
+          id: markerId,
+          type: "text",
+          x: markerX,
+          y: markerY,
+          text: "★",
+          fontSize: NOVEL_MARKER_SIZE,
+          strokeColor: "#f08c00",
+          roughness: 0,
+        },
+      ],
+      { regenerateIds: false },
+    );
+
+    excalidrawAPI.updateScene({
+      elements: [...updatedElements, ...star],
+    });
+    novelConceptIdRef.current = conceptId;
+    novelMarkerElementIdRef.current = markerId;
+  }
+
   const deleteNodesFromCanvas = (nodesToDelete: CKCanvasNode[]) => {
     if (!excalidrawAPI || !nodesToDelete.length) {
       return;
@@ -371,6 +452,15 @@ export const CKAgentPanel = ({
       for (const extraArrowId of node.extraArrowIds) {
         ids.add(extraArrowId);
       }
+    }
+    if (
+      novelMarkerElementIdRef.current &&
+      novelConceptIdRef.current &&
+      nodesToDelete.some((node) => node.id === novelConceptIdRef.current)
+    ) {
+      ids.add(novelMarkerElementIdRef.current);
+      novelConceptIdRef.current = null;
+      novelMarkerElementIdRef.current = null;
     }
 
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -588,6 +678,9 @@ export const CKAgentPanel = ({
 
     const prevNodes = nodesRef.current;
     const prevInitialNodes = prevNodes.filter((node) => !node.generated);
+    if (novelMarkerElementIdRef.current) {
+      clearNovelMarkerFromCanvas();
+    }
     const concept = initialConcept.trim();
     const knowledgeEntries = initialKnowledge
       .map((entry) => entry.trim())
@@ -705,7 +798,7 @@ export const CKAgentPanel = ({
         ? currentNodes.find((node) => node.id === selectedNodeId) || null
         : null;
     const focusNode =
-      operation === "ExpandConcept"
+      operation === "ExpandConcept" || operation === "DecideNovelConcept"
         ? (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
           [...currentNodes].reverse().find((node) => node.type === "concept") ||
           null
@@ -745,11 +838,14 @@ export const CKAgentPanel = ({
       }
 
       if (result.noveltyDecision) {
+        const scoreText = result.noveltyDecision.scores
+          ? ` (N ${result.noveltyDecision.scores.novelty.toFixed(1)}, F ${result.noveltyDecision.scores.feasibility.toFixed(1)}, U ${result.noveltyDecision.scores.usefulness.toFixed(1)}, C ${result.noveltyDecision.scores.clarity.toFixed(1)})`
+          : "";
         setLatestDecision(
-          `Novelty: ${
-            result.noveltyDecision.isNovel ? "Novel" : "Not novel"
-          } - ${result.noveltyDecision.rationale}`,
+          `Best concept: ${result.noveltyDecision.selectedConceptId}${scoreText}. ${result.noveltyDecision.rationale}`,
         );
+        setSelectedNodeId(result.noveltyDecision.selectedConceptId);
+        markNovelConceptOnCanvas(result.noveltyDecision.selectedConceptId);
       }
 
       const generatedEntries = result.generatedEntries?.length

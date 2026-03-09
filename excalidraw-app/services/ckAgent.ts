@@ -41,13 +41,21 @@ export interface CKGeneratedEntry {
   sourceKnowledgeIds?: string[];
 }
 
+export interface CKNoveltyScores {
+  novelty: number;
+  feasibility: number;
+  usefulness: number;
+  clarity: number;
+}
+
 export interface CKOperationResult {
   generatedEntry?: CKGeneratedEntry;
   generatedEntries?: CKGeneratedEntry[];
   reorderedIds?: string[];
   noveltyDecision?: {
-    isNovel: boolean;
+    selectedConceptId: string;
     rationale: string;
+    scores?: CKNoveltyScores;
   };
   dialogue: CKAgentMessage[];
 }
@@ -187,14 +195,37 @@ const normalizeRemoteResult = (payload: unknown): CKOperationResult | null => {
       ? (() => {
           const decision = data.noveltyDecision as Record<string, unknown>;
           if (
-            typeof decision.isNovel !== "boolean" ||
+            typeof decision.selectedConceptId !== "string" ||
             typeof decision.rationale !== "string"
           ) {
             return undefined;
           }
+          const scores =
+            decision.scores &&
+            typeof decision.scores === "object" &&
+            decision.scores !== null
+              ? (() => {
+                  const rawScores = decision.scores as Record<string, unknown>;
+                  if (
+                    typeof rawScores.novelty !== "number" ||
+                    typeof rawScores.feasibility !== "number" ||
+                    typeof rawScores.usefulness !== "number" ||
+                    typeof rawScores.clarity !== "number"
+                  ) {
+                    return undefined;
+                  }
+                  return {
+                    novelty: rawScores.novelty,
+                    feasibility: rawScores.feasibility,
+                    usefulness: rawScores.usefulness,
+                    clarity: rawScores.clarity,
+                  } as CKNoveltyScores;
+                })()
+              : undefined;
           return {
-            isNovel: decision.isNovel,
+            selectedConceptId: decision.selectedConceptId,
             rationale: decision.rationale,
+            scores,
           };
         })()
       : undefined;
@@ -394,6 +425,74 @@ const runRemoteOperation = async (
 
     return {
       generatedEntries,
+      dialogue: [],
+    };
+  }
+
+  if (input.operation === "DecideNovelConcept") {
+    const response = await fetch(`${base}/nodes/decide-novel-concept`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/decide-novel-concept failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      selected_concept_id?: string;
+      rationale?: string;
+      scores?: {
+        novelty?: number;
+        feasibility?: number;
+        usefulness?: number;
+        clarity?: number;
+      };
+    };
+
+    if (
+      typeof payload.selected_concept_id !== "string" ||
+      !payload.selected_concept_id.trim() ||
+      typeof payload.rationale !== "string"
+    ) {
+      throw new Error(
+        "Invalid response payload from /nodes/decide-novel-concept.",
+      );
+    }
+
+    const scores =
+      payload.scores &&
+      typeof payload.scores.novelty === "number" &&
+      typeof payload.scores.feasibility === "number" &&
+      typeof payload.scores.usefulness === "number" &&
+      typeof payload.scores.clarity === "number"
+        ? {
+            novelty: payload.scores.novelty,
+            feasibility: payload.scores.feasibility,
+            usefulness: payload.scores.usefulness,
+            clarity: payload.scores.clarity,
+          }
+        : undefined;
+
+    return {
+      noveltyDecision: {
+        selectedConceptId: payload.selected_concept_id,
+        rationale: payload.rationale,
+        scores,
+      },
       dialogue: [],
     };
   }

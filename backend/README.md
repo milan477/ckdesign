@@ -10,6 +10,7 @@ This backend hosts the CK agent routes used by the Excalidraw integration.
 - `POST /nodes/reorder`
 - `POST /nodes/create-concept` (runs a single `k_to_c` and returns one concept)
 - `POST /nodes/expand-concept` (runs C->C expansion and returns 2-3 child concepts)
+- `POST /nodes/decide-novel-concept` (selects best concept using novelty/feasibility/usefulness/clarity)
 
 ## Setup
 

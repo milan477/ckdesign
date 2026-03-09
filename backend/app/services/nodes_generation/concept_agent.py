@@ -141,5 +141,57 @@ class ConceptAgent:
     def RenderConcept(self, *args, **kwargs):
         raise NotImplementedError("RenderConcept is not implemented yet.")
 
-    def DecideNovelConcept(self, *args, **kwargs):
-        raise NotImplementedError("DecideNovelConcept is not implemented yet.")
+    def DecideNovelConcept(self, ck_history, topic):
+        history = [self._entry_to_dict(entry) for entry in ck_history]
+        concept_entries = [
+            entry for entry in history if str(entry.get("type", "")).lower() == "concept"
+        ]
+        if not concept_entries:
+            raise ValueError("DecideNovelConcept requires at least one concept in ck_history.")
+
+        prompt = CKPromptEngine.decide_novel_concept(topic, json.dumps(history, indent=2))
+
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+
+        payload = json.loads(response.choices[0].message.content or "{}")
+        selected_concept_id = str(payload.get("selected_concept_id", "")).strip()
+        rationale = str(payload.get("rationale", "")).strip()
+        raw_scores = payload.get("scores", {})
+
+        concept_id_set = {str(entry.get("id", "")).strip() for entry in concept_entries}
+        if selected_concept_id not in concept_id_set:
+            selected_concept_id = str(concept_entries[-1].get("id", "")).strip()
+
+        def _score_value(key):
+            if isinstance(raw_scores, dict):
+                value = raw_scores.get(key)
+                if isinstance(value, (int, float)):
+                    return float(value)
+            return 0.0
+
+        scores = {
+            "novelty": _score_value("novelty"),
+            "feasibility": _score_value("feasibility"),
+            "usefulness": _score_value("usefulness"),
+            "clarity": _score_value("clarity"),
+        }
+
+        if not rationale:
+            rationale = (
+                "Selected as the strongest overall concept across novelty, "
+                "feasibility, usefulness, and clarity."
+            )
+
+        return {
+            "selected_concept_id": selected_concept_id,
+            "rationale": rationale,
+            "scores": scores,
+        }

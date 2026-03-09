@@ -191,6 +191,49 @@ Rules:
         """
 
     @staticmethod
+    def decide_novel_concept(topic: str, ck_history: str) -> str:
+        """Select the best concept using novelty, feasibility, usefulness, and clarity."""
+        return f"""
+You are an AI specializing in Design Innovation using C-K Theory.
+The topic you are working on is to {topic}.
+
+You must evaluate candidate concepts from the CK history and choose the single best concept.
+
+Evaluation criteria (score each 1-10):
+1. Novelty - how different it is from existing ideas.
+2. Feasibility - whether it could realistically be implemented.
+3. Usefulness - how well it solves the design problem.
+4. Clarity - how clearly the idea is defined.
+
+CK history:
+{ck_history}
+
+Instructions:
+- Consider only entries where type is "concept".
+- Select exactly one winning concept.
+- Give a concise rationale that directly references the four criteria.
+- Use consistent scoring.
+
+Return valid JSON only in this exact shape:
+{{
+  "selected_concept_id": "C#",
+  "rationale": "2-4 sentence explanation",
+  "scores": {{
+    "novelty": 0,
+    "feasibility": 0,
+    "usefulness": 0,
+    "clarity": 0
+  }}
+}}
+
+Rules:
+- No markdown.
+- No trailing commas.
+- No comments.
+- No text outside the JSON object.
+        """
+
+    @staticmethod
     def initialize_knowledge_entries(topic: str) -> str:
         """Prompt to generate initial knowledge entries based on topic"""
         return f"""

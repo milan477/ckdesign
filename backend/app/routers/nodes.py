@@ -6,6 +6,8 @@ from backend.app.schemas.node import (
     CKEntry,
     CreateConceptRequest,
     CreateConceptResponse,
+    DecideNovelConceptRequest,
+    DecideNovelConceptResponse,
     ExpandConceptRequest,
     ExpandConceptResponse,
     NodeGenerateRequest,
@@ -156,6 +158,20 @@ async def expand_concept(request: ExpandConceptRequest):
         return response_payload
     except Exception as e:
         logger.error("Error in expand_concept: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/decide-novel-concept", response_model=DecideNovelConceptResponse)
+async def decide_novel_concept(request: DecideNovelConceptRequest):
+    """Select the best concept using novelty/feasibility/usefulness/clarity."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        decision = agent.decide_novel_concept(history, request.topic)
+        logger.info("decide_novel_concept response: %s", decision)
+        return decision
+    except Exception as e:
+        logger.error("Error in decide_novel_concept: %s", str(e))
         return {"error": str(e)}
 
 

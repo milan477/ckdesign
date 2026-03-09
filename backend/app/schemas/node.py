@@ -59,3 +59,21 @@ class ExpandConceptRequest(BaseModel):
 class ExpandConceptResponse(BaseModel):
     parent_concept_id: str
     concepts: List[CKEntry]
+
+
+class NovelConceptScores(BaseModel):
+    novelty: float
+    feasibility: float
+    usefulness: float
+    clarity: float
+
+
+class DecideNovelConceptRequest(BaseModel):
+    topic: str
+    ck_history: List[CKEntry]
+
+
+class DecideNovelConceptResponse(BaseModel):
+    selected_concept_id: str
+    rationale: str
+    scores: NovelConceptScores

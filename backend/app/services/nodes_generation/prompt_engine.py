@@ -151,8 +151,13 @@ Use the CK history to reason about what new concepts, ideas, or possibilities co
         """
 
     @staticmethod
-    def expand_concept(topic: str, ck_history: str, focus_concept: str) -> str:
-        """Expand a selected concept into 2-3 child concepts (C-->C)."""
+    def expand_concept(
+        topic: str,
+        ck_history: str,
+        focus_concept: str,
+        target_count: int = 2,
+    ) -> str:
+        """Expand a selected concept into a requested number of child concepts (C-->C)."""
         return f"""
 You are an AI simulation with the goal of doing a C-->C operation from the C-K Theory.
 The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
@@ -162,7 +167,7 @@ Concept Space (C) - This space consists of propositions that do not yet have a l
 
 Your task:
 1. Focus on the selected concept shown below.
-2. Expand that concept into 2 or 3 new child concepts.
+2. Expand that concept into exactly {target_count} new child concepts.
 3. Each child concept must stay in Concept Space (not validated/refuted yet).
 4. Make each child direction meaningfully different from the others.
 
@@ -184,7 +189,7 @@ Return valid JSON only in this exact shape:
 }}
 
 Rules:
-- Return exactly 2 or 3 concepts.
+- Return exactly {target_count} concepts.
 - No markdown.
 - No trailing commas.
 - No text outside the JSON object.
@@ -296,8 +301,13 @@ Return a direct answer that can be transformed into:
         """
 
     @staticmethod
-    def expand_knowledge(topic: str, ck_history: str, focus_knowledge: str) -> str:
-        """Expand a selected knowledge entry into 2-3 child knowledge entries (K-->K)."""
+    def expand_knowledge(
+        topic: str,
+        ck_history: str,
+        focus_knowledge: str,
+        target_count: int = 2,
+    ) -> str:
+        """Expand a selected knowledge entry into a requested number of child knowledge entries (K-->K)."""
         return f"""
 You are an AI simulation with the goal of doing a K-->K operation from the C-K Theory.
 The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
@@ -307,7 +317,7 @@ Concept Space (C) - undecidable propositions not yet validated in K.
 
 Your task:
 1. Focus on the selected knowledge entry shown below.
-2. Expand that knowledge into 2 or 3 new child knowledge entries.
+2. Expand that knowledge into exactly {target_count} new child knowledge entries.
 3. Each child entry must stay in Knowledge Space (specific, testable, and practically useful).
 4. Make each child direction meaningfully different from the others.
 
@@ -329,7 +339,7 @@ Return valid JSON only in this exact shape:
 }}
 
 Rules:
-- Return exactly 2 or 3 knowledge entries.
+- Return exactly {target_count} knowledge entries.
 - No markdown.
 - No trailing commas.
 - No text outside the JSON object.

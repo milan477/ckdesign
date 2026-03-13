@@ -260,6 +260,18 @@ const parseNodeSelectionId = (rawInput: string, expectedPrefix: "C" | "K") => {
   return `${expectedPrefix}${Number.parseInt(suffix, 10)}`;
 };
 
+const parseExpandCount = (rawInput: string) => {
+  const normalized = rawInput.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
+  }
+  const value = Number.parseInt(normalized, 10);
+  if (value < 1 || value > 5) {
+    return null;
+  }
+  return value;
+};
+
 const hasContainerId = (
   element: ExcalidrawElement,
 ): element is ExcalidrawElement & { containerId: string } =>
@@ -834,6 +846,7 @@ export const CKAgentPanel = ({
       null;
 
     let focusNode: CKCanvasNode | null;
+    let expandCount: number | undefined;
     if (operation === "CreateConcept") {
       const knowledgeNodes = currentNodes.filter(
         (node) => node.type === "knowledge",
@@ -898,17 +911,102 @@ export const CKAgentPanel = ({
         toast(`Concept ${selectedId} not found in current history.`);
         return;
       }
-    } else if (
-      operation === "ExpandConcept" ||
-      operation === "DecideNovelConcept"
-    ) {
+    } else if (operation === "ExpandConcept") {
+      const conceptNodes = currentNodes.filter(
+        (node) => node.type === "concept",
+      );
+      if (!conceptNodes.length) {
+        toast("No concept entries available.");
+        return;
+      }
+
+      const selectedRaw = window.prompt(
+        `Enter concept number for ExpandConcept (e.g., 1 for C1).\nAvailable: ${conceptNodes
+          .map((node) => node.id)
+          .join(", ")}`,
+      );
+      if (selectedRaw === null) {
+        return;
+      }
+      const selectedId = parseNodeSelectionId(selectedRaw, "C");
+      if (!selectedId) {
+        toast("Invalid concept number. Use a number like 1 or an ID like C1.");
+        return;
+      }
+
+      focusNode =
+        conceptNodes.find(
+          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
+        ) || null;
+      if (!focusNode) {
+        toast(`Concept ${selectedId} not found in current history.`);
+        return;
+      }
+
+      const countRaw = window.prompt(
+        "How many concept entries to generate? (1-5)",
+        "2",
+      );
+      if (countRaw === null) {
+        return;
+      }
+      const parsedCount = parseExpandCount(countRaw);
+      if (!parsedCount) {
+        toast("Invalid count. Enter a number between 1 and 5.");
+        return;
+      }
+      expandCount = parsedCount;
+    } else if (operation === "ExpandKnowledge") {
+      const knowledgeNodes = currentNodes.filter(
+        (node) => node.type === "knowledge",
+      );
+      if (!knowledgeNodes.length) {
+        toast("No knowledge entries available.");
+        return;
+      }
+
+      const selectedRaw = window.prompt(
+        `Enter knowledge number for ExpandKnowledge (e.g., 2 for K2).\nAvailable: ${knowledgeNodes
+          .map((node) => node.id)
+          .join(", ")}`,
+      );
+      if (selectedRaw === null) {
+        return;
+      }
+      const selectedId = parseNodeSelectionId(selectedRaw, "K");
+      if (!selectedId) {
+        toast(
+          "Invalid knowledge number. Use a number like 2 or an ID like K2.",
+        );
+        return;
+      }
+
+      focusNode =
+        knowledgeNodes.find(
+          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
+        ) || null;
+      if (!focusNode) {
+        toast(`Knowledge ${selectedId} not found in current history.`);
+        return;
+      }
+
+      const countRaw = window.prompt(
+        "How many knowledge entries to generate? (1-5)",
+        "2",
+      );
+      if (countRaw === null) {
+        return;
+      }
+      const parsedCount = parseExpandCount(countRaw);
+      if (!parsedCount) {
+        toast("Invalid count. Enter a number between 1 and 5.");
+        return;
+      }
+      expandCount = parsedCount;
+    } else if (operation === "DecideNovelConcept") {
       focusNode =
         (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
         latestConceptNode;
-    } else if (operation === "ExpandKnowledge") {
-      focusNode =
-        (selectedFocusNode?.type === "knowledge" ? selectedFocusNode : null) ||
-        latestKnowledgeNode;
     } else {
       focusNode = selectedFocusNode || latestConceptNode || latestKnowledgeNode;
     }
@@ -932,6 +1030,7 @@ export const CKAgentPanel = ({
           parentId: focusNode.parentId,
         },
         history: toContextEntries(currentNodes),
+        expandCount,
       });
 
       pushTranscript(result.dialogue);

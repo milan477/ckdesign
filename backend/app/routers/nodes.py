@@ -159,7 +159,7 @@ async def create_knowledge(request: CreateKnowledgeRequest):
 
 @router.post("/expand-concept", response_model=ExpandConceptResponse)
 async def expand_concept(request: ExpandConceptRequest):
-    """Expand a selected concept into 2-3 child concepts via C->C operation."""
+    """Expand a selected concept into requested child concepts (1-5) via C->C operation."""
     try:
         agent = CKAgent()
         history = [entry.model_dump() for entry in request.ck_history]
@@ -167,6 +167,7 @@ async def expand_concept(request: ExpandConceptRequest):
             history,
             request.topic,
             focus_entry_id=request.focus_entry_id,
+            target_count=request.num_entries,
         )
 
         max_concept_index = 0
@@ -202,7 +203,7 @@ async def expand_concept(request: ExpandConceptRequest):
 
 @router.post("/expand-knowledge", response_model=ExpandKnowledgeResponse)
 async def expand_knowledge(request: ExpandKnowledgeRequest):
-    """Expand a selected knowledge entry into 2-3 child knowledge entries via K->K operation."""
+    """Expand a selected knowledge entry into requested child knowledge entries (1-5) via K->K operation."""
     try:
         agent = CKAgent()
         history = [entry.model_dump() for entry in request.ck_history]
@@ -210,6 +211,7 @@ async def expand_knowledge(request: ExpandKnowledgeRequest):
             history,
             request.topic,
             focus_entry_id=request.focus_entry_id,
+            target_count=request.num_entries,
         )
 
         max_knowledge_index = 0

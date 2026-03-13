@@ -31,6 +31,7 @@ export interface CKOperationInput {
   topic: string;
   focusEntry: CKEntryContext | null;
   history: CKEntryContext[];
+  expandCount?: number;
 }
 
 export interface CKGeneratedEntry {
@@ -301,6 +302,7 @@ const runRemoteOperation = async (
         topic: input.topic,
         ck_history: toBackendHistory(input.history),
         focus_entry_id: input.focusEntry?.id ?? null,
+        num_entries: input.expandCount,
       }),
     });
 
@@ -371,6 +373,7 @@ const runRemoteOperation = async (
         topic: input.topic,
         ck_history: toBackendHistory(input.history),
         focus_entry_id: input.focusEntry?.id ?? null,
+        num_entries: input.expandCount,
       }),
     });
 
@@ -429,6 +432,7 @@ const runRemoteOperation = async (
         topic: input.topic,
         ck_history: toBackendHistory(input.history),
         focus_entry_id: input.focusEntry?.id ?? null,
+        num_entries: input.expandCount,
       }),
     });
 
@@ -479,7 +483,7 @@ const runRemoteOperation = async (
       });
     }
 
-    if (generatedEntries.length < 2) {
+    if (!generatedEntries.length || generatedEntries.length > 5) {
       throw new Error("Invalid response payload from /nodes/expand-concept.");
     }
 
@@ -610,6 +614,7 @@ const runRemoteOperation = async (
         topic: input.topic,
         ck_history: toBackendHistory(input.history),
         focus_entry_id: input.focusEntry?.id ?? null,
+        num_entries: input.expandCount,
       }),
     });
 
@@ -653,7 +658,7 @@ const runRemoteOperation = async (
       });
     }
 
-    if (generatedEntries.length < 2) {
+    if (!generatedEntries.length || generatedEntries.length > 5) {
       throw new Error("Invalid response payload from /nodes/expand-knowledge.");
     }
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
@@ -66,6 +66,7 @@ class ExpandConceptRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]
     focus_entry_id: Optional[str] = None
+    num_entries: Optional[int] = Field(default=None, ge=1, le=5)
 
 
 class ExpandConceptResponse(BaseModel):
@@ -77,6 +78,7 @@ class ExpandKnowledgeRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]
     focus_entry_id: Optional[str] = None
+    num_entries: Optional[int] = Field(default=None, ge=1, le=5)
 
 
 class ExpandKnowledgeResponse(BaseModel):

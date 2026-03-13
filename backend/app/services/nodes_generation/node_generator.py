@@ -310,12 +310,13 @@ class CKAgent:
             focus_entry_id=focus_entry_id,
         )
 
-    def expand_concept(self, ck_history, topic, focus_entry_id=None):
-        """Expand a concept into 2-3 child concepts."""
+    def expand_concept(self, ck_history, topic, focus_entry_id=None, target_count=None):
+        """Expand a concept into requested child concepts."""
         return self.concept_agent.ExpandConcept(
             ck_history,
             topic,
             focus_entry_id=focus_entry_id,
+            target_count=target_count,
         )
 
     def decide_novel_concept(self, ck_history, topic):
@@ -330,12 +331,13 @@ class CKAgent:
             focus_entry_id=focus_entry_id,
         )
 
-    def expand_knowledge(self, ck_history, topic, focus_entry_id=None):
-        """Expand one knowledge entry into 2-3 child knowledge entries."""
+    def expand_knowledge(self, ck_history, topic, focus_entry_id=None, target_count=None):
+        """Expand one knowledge entry into requested child knowledge entries."""
         return self.knowledge_agent.ExpandKnowledge(
             ck_history,
             topic,
             focus_entry_id=focus_entry_id,
+            target_count=target_count,
         )
 
     def get_k(self, topic):

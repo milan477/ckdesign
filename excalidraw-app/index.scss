@@ -95,6 +95,27 @@
     padding: 0.65rem;
   }
 
+  .ck-agent-overlay-drag-handle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px dashed var(--default-border-color);
+    border-radius: 0.5rem;
+    background: var(--default-bg-color);
+    color: var(--text-secondary-color);
+    padding: 0.3rem 0.55rem;
+    margin-bottom: 0.55rem;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .ck-agent-overlay-drag-handle:active {
+    cursor: grabbing;
+  }
+
   @media (max-width: 768px) {
     .ck-agent-overlay {
       top: auto;
@@ -103,6 +124,11 @@
       right: 0.5rem;
       width: auto;
       max-height: 42vh;
+    }
+
+    .ck-agent-overlay-drag-handle {
+      font-size: 0.72rem;
+      margin-bottom: 0.45rem;
     }
   }
 }

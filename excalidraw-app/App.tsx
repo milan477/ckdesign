@@ -32,7 +32,13 @@ import {
   isDevEnv,
 } from "@excalidraw/common";
 import polyfill from "@excalidraw/excalidraw/polyfill";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { loadFromBlob } from "@excalidraw/excalidraw/data/blob";
 import { useCallbackRefState } from "@excalidraw/excalidraw/hooks/useCallbackRefState";
 import { t } from "@excalidraw/excalidraw/i18n";
@@ -376,8 +382,136 @@ const ExcalidrawWrapper = () => {
   const { editorTheme, appTheme, setAppTheme } = useHandleAppTheme();
 
   const [langCode, setLangCode] = useAppLangCode();
+  const ckOverlayRef = useRef<HTMLDivElement>(null);
+  const ckOverlayDragRef = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [ckOverlayPosition, setCkOverlayPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   const editorInterface = useEditorInterface();
+
+  const clampCkOverlayPosition = useCallback(
+    (x: number, y: number, width: number, height: number) => {
+      const margin = 8;
+      const maxX = Math.max(margin, window.innerWidth - width - margin);
+      const maxY = Math.max(margin, window.innerHeight - height - margin);
+      return {
+        x: Math.min(Math.max(x, margin), maxX),
+        y: Math.min(Math.max(y, margin), maxY),
+      };
+    },
+    [],
+  );
+
+  const endCkOverlayDrag = useCallback(() => {
+    ckOverlayDragRef.current = null;
+    document.body.style.removeProperty("user-select");
+  }, []);
+
+  const handleCkOverlayPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const overlay = ckOverlayRef.current;
+      if (!overlay) {
+        return;
+      }
+
+      const rect = overlay.getBoundingClientRect();
+      const clamped = clampCkOverlayPosition(
+        rect.left,
+        rect.top,
+        rect.width,
+        rect.height,
+      );
+      setCkOverlayPosition(clamped);
+
+      ckOverlayDragRef.current = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.setProperty("user-select", "none");
+      event.preventDefault();
+    },
+    [clampCkOverlayPosition],
+  );
+
+  const handleCkOverlayPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const dragState = ckOverlayDragRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      const clamped = clampCkOverlayPosition(
+        event.clientX - dragState.offsetX,
+        event.clientY - dragState.offsetY,
+        dragState.width,
+        dragState.height,
+      );
+      setCkOverlayPosition(clamped);
+      event.preventDefault();
+    },
+    [clampCkOverlayPosition],
+  );
+
+  const handleCkOverlayPointerEnd = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const dragState = ckOverlayDragRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      endCkOverlayDrag();
+    },
+    [endCkOverlayDrag],
+  );
+
+  useEffect(() => {
+    return () => {
+      endCkOverlayDrag();
+    };
+  }, [endCkOverlayDrag]);
+
+  useEffect(() => {
+    if (!ckOverlayPosition) {
+      return;
+    }
+
+    const onResize = () => {
+      const overlay = ckOverlayRef.current;
+      if (!overlay) {
+        return;
+      }
+
+      const rect = overlay.getBoundingClientRect();
+      setCkOverlayPosition((prev) =>
+        prev
+          ? clampCkOverlayPosition(prev.x, prev.y, rect.width, rect.height)
+          : prev,
+      );
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [ckOverlayPosition, clampCkOverlayPosition]);
 
   // initial state
   // ---------------------------------------------------------------------------
@@ -989,7 +1123,33 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
-        <div className="ck-agent-overlay">
+        <div
+          ref={ckOverlayRef}
+          className="ck-agent-overlay"
+          style={
+            ckOverlayPosition
+              ? {
+                  position: "fixed",
+                  left: ckOverlayPosition.x,
+                  top: ckOverlayPosition.y,
+                  right: "auto",
+                }
+              : undefined
+          }
+        >
+          <button
+            type="button"
+            className="ck-agent-overlay-drag-handle"
+            aria-label="Drag action panel"
+            onPointerDown={handleCkOverlayPointerDown}
+            onPointerMove={handleCkOverlayPointerMove}
+            onPointerUp={handleCkOverlayPointerEnd}
+            onPointerCancel={handleCkOverlayPointerEnd}
+            onLostPointerCapture={endCkOverlayDrag}
+          >
+            <span>Action panel</span>
+            <span>Drag</span>
+          </button>
           {excalidrawAPI && <CKAgentPanel excalidrawAPI={excalidrawAPI} />}
         </div>
 

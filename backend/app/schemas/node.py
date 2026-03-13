@@ -43,6 +43,7 @@ class ReorderResponse(BaseModel):
 class CreateConceptRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]
+    focus_entry_id: Optional[str] = None
 
 
 class CreateConceptResponse(BaseModel):

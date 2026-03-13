@@ -75,7 +75,11 @@ const OPERATION_LABELS: Record<CKOperation, string> = {
   ValidateConcept: "ValidateConcept()",
 };
 
-const getNodeColors = (type: CKNodeType, _status: NodeStatus, nodeId?: string) => {
+const getNodeColors = (
+  type: CKNodeType,
+  _status: NodeStatus,
+  nodeId?: string,
+) => {
   // C0 (initial concept) is blue
   if (type === "concept" && nodeId === "C0") {
     return {
@@ -239,6 +243,23 @@ const reorderByIds = (
   );
 };
 
+const parseNodeSelectionId = (rawInput: string, expectedPrefix: "C" | "K") => {
+  const normalized = rawInput.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const suffix = normalized.startsWith(expectedPrefix)
+    ? normalized.slice(1).trim()
+    : normalized;
+
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+
+  return `${expectedPrefix}${Number.parseInt(suffix, 10)}`;
+};
+
 const hasContainerId = (
   element: ExcalidrawElement,
 ): element is ExcalidrawElement & { containerId: string } =>
@@ -377,7 +398,9 @@ export const CKAgentPanel = ({
     }
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
     const updatedElements = currentElements.map((element) =>
-      element.id === markerId ? newElementWith(element, { isDeleted: true }) : element,
+      element.id === markerId
+        ? newElementWith(element, { isDeleted: true })
+        : element,
     );
     excalidrawAPI.updateScene({ elements: updatedElements });
     novelConceptIdRef.current = null;
@@ -402,7 +425,9 @@ export const CKAgentPanel = ({
     if (novelMarkerElementIdRef.current) {
       for (let i = 0; i < updatedElements.length; i++) {
         if (updatedElements[i].id === novelMarkerElementIdRef.current) {
-          updatedElements[i] = newElementWith(updatedElements[i], { isDeleted: true });
+          updatedElements[i] = newElementWith(updatedElements[i], {
+            isDeleted: true,
+          });
           break;
         }
       }
@@ -411,8 +436,10 @@ export const CKAgentPanel = ({
     const liveNodeElement = currentElements.find(
       (element) => element.id === targetNode.elementId && !element.isDeleted,
     );
-    const markerX = (liveNodeElement?.x ?? targetNode.x) - NOVEL_MARKER_OFFSET_X;
-    const markerY = (liveNodeElement?.y ?? targetNode.y) - NOVEL_MARKER_OFFSET_Y;
+    const markerX =
+      (liveNodeElement?.x ?? targetNode.x) - NOVEL_MARKER_OFFSET_X;
+    const markerY =
+      (liveNodeElement?.y ?? targetNode.y) - NOVEL_MARKER_OFFSET_Y;
     const markerId = nextElementId("novel-star");
 
     const star = convertToExcalidrawElements(
@@ -795,10 +822,9 @@ export const CKAgentPanel = ({
       return;
     }
 
-    const selectedFocusNode =
-      selectedNodeId
-        ? currentNodes.find((node) => node.id === selectedNodeId) || null
-        : null;
+    const selectedFocusNode = selectedNodeId
+      ? currentNodes.find((node) => node.id === selectedNodeId) || null
+      : null;
 
     const latestConceptNode =
       [...currentNodes].reverse().find((node) => node.type === "concept") ||
@@ -808,10 +834,73 @@ export const CKAgentPanel = ({
       null;
 
     let focusNode: CKCanvasNode | null;
-    if (
+    if (operation === "CreateConcept") {
+      const knowledgeNodes = currentNodes.filter(
+        (node) => node.type === "knowledge",
+      );
+      if (!knowledgeNodes.length) {
+        toast("No knowledge entries available.");
+        return;
+      }
+
+      const selectedRaw = window.prompt(
+        `Enter knowledge number for CreateConcept (e.g., 2 for K2).\nAvailable: ${knowledgeNodes
+          .map((node) => node.id)
+          .join(", ")}`,
+      );
+      if (selectedRaw === null) {
+        return;
+      }
+      const selectedId = parseNodeSelectionId(selectedRaw, "K");
+      if (!selectedId) {
+        toast(
+          "Invalid knowledge number. Use a number like 2 or an ID like K2.",
+        );
+        return;
+      }
+
+      focusNode =
+        knowledgeNodes.find(
+          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
+        ) || null;
+      if (!focusNode) {
+        toast(`Knowledge ${selectedId} not found in current history.`);
+        return;
+      }
+    } else if (operation === "CreateKnowledge") {
+      const conceptNodes = currentNodes.filter(
+        (node) => node.type === "concept",
+      );
+      if (!conceptNodes.length) {
+        toast("No concept entries available.");
+        return;
+      }
+
+      const selectedRaw = window.prompt(
+        `Enter concept number for CreateKnowledge (e.g., 1 for C1).\nAvailable: ${conceptNodes
+          .map((node) => node.id)
+          .join(", ")}`,
+      );
+      if (selectedRaw === null) {
+        return;
+      }
+      const selectedId = parseNodeSelectionId(selectedRaw, "C");
+      if (!selectedId) {
+        toast("Invalid concept number. Use a number like 1 or an ID like C1.");
+        return;
+      }
+
+      focusNode =
+        conceptNodes.find(
+          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
+        ) || null;
+      if (!focusNode) {
+        toast(`Concept ${selectedId} not found in current history.`);
+        return;
+      }
+    } else if (
       operation === "ExpandConcept" ||
-      operation === "DecideNovelConcept" ||
-      operation === "CreateKnowledge"
+      operation === "DecideNovelConcept"
     ) {
       focusNode =
         (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
@@ -858,7 +947,13 @@ export const CKAgentPanel = ({
 
       if (result.noveltyDecision) {
         const scoreText = result.noveltyDecision.scores
-          ? ` (N ${result.noveltyDecision.scores.novelty.toFixed(1)}, F ${result.noveltyDecision.scores.feasibility.toFixed(1)}, U ${result.noveltyDecision.scores.usefulness.toFixed(1)}, C ${result.noveltyDecision.scores.clarity.toFixed(1)})`
+          ? ` (N ${result.noveltyDecision.scores.novelty.toFixed(
+              1,
+            )}, F ${result.noveltyDecision.scores.feasibility.toFixed(
+              1,
+            )}, U ${result.noveltyDecision.scores.usefulness.toFixed(
+              1,
+            )}, C ${result.noveltyDecision.scores.clarity.toFixed(1)})`
           : "";
         setLatestDecision(
           `Best concept: ${result.noveltyDecision.selectedConceptId}${scoreText}. ${result.noveltyDecision.rationale}`,
@@ -918,7 +1013,9 @@ export const CKAgentPanel = ({
         nodesRef.current = [...currentNodes, ...generatedNodes];
         setSelectedNodeId(generatedNodes[generatedNodes.length - 1].id);
         const resultLabel =
-          generatedNodes[0].type === "knowledge" ? "knowledge nodes" : "concepts";
+          generatedNodes[0].type === "knowledge"
+            ? "knowledge nodes"
+            : "concepts";
         setLatestDecision(
           generatedNodes.length > 1
             ? `${operation} generated ${generatedNodes.length} ${resultLabel}.`

@@ -302,9 +302,13 @@ class CKAgent:
 
         return final_title, final_desc
 
-    def k_to_c(self, ck_history, topic):
+    def k_to_c(self, ck_history, topic, focus_entry_id=None):
         """Compatibility wrapper. Delegates to ConceptAgent.CreateConcept."""
-        return self.concept_agent.CreateConcept(ck_history, topic)
+        return self.concept_agent.CreateConcept(
+            ck_history,
+            topic,
+            focus_entry_id=focus_entry_id,
+        )
 
     def expand_concept(self, ck_history, topic, focus_entry_id=None):
         """Expand a concept into 2-3 child concepts."""
@@ -453,7 +457,7 @@ class CKAgent:
                 title, desc = self.k_to_k(filtered_history, topic)
                 future_id = "K" + str(iteration + 1)
             elif current_type == CKType.KNOWLEDGE and future_type == CKType.CONCEPT:
-                title, desc = self.k_to_c(filtered_history, topic)
+                _, title, desc = self.k_to_c(filtered_history, topic)
                 future_id = "C" + str(iteration + 1)
             else:
                 title, desc = self.c_to_c(filtered_history, topic)

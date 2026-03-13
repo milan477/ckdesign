@@ -28,9 +28,33 @@ class ConceptAgent:
             "operation_rationale": getattr(entry, "operation_rationale", ""),
         }
 
-    def CreateConcept(self, ck_history, topic):
-        """Knowledge-to-Concept generation (migrated from CKAgent.k_to_c)."""
-        prompt_k_to_c = CKPromptEngine.knowledge_to_concept(topic, ck_history)
+    def CreateConcept(self, ck_history, topic, focus_entry_id=None):
+        """Knowledge-to-Concept generation from a selected knowledge entry."""
+        history = [self._entry_to_dict(entry) for entry in ck_history]
+        knowledge_entries = [
+            entry for entry in history if str(entry.get("type", "")).lower() == "knowledge"
+        ]
+        if not knowledge_entries:
+            raise ValueError("CreateConcept requires at least one knowledge entry in ck_history.")
+
+        focus_knowledge = None
+        if focus_entry_id:
+            focus_knowledge = next(
+                (
+                    entry
+                    for entry in knowledge_entries
+                    if str(entry.get("id", "")).strip() == str(focus_entry_id).strip()
+                ),
+                None,
+            )
+        if focus_knowledge is None:
+            focus_knowledge = knowledge_entries[-1]
+
+        prompt_k_to_c = CKPromptEngine.create_concept_from_knowledge(
+            topic,
+            json.dumps(history, indent=2),
+            json.dumps(focus_knowledge, indent=2),
+        )
 
         title_prmpt = CKPromptEngine.TITLE_TRANSFORM
         desc_prmpt = CKPromptEngine.DESC_TRANSFORM
@@ -69,7 +93,7 @@ class ConceptAgent:
         final_title = response_title.choices[0].message.content
         final_desc = response_desc.choices[0].message.content
 
-        return final_title, final_desc
+        return focus_knowledge.get("id", ""), final_title, final_desc
 
     def ExpandConcept(self, ck_history, topic, focus_entry_id=None):
         history = [self._entry_to_dict(entry) for entry in ck_history]

@@ -300,6 +300,7 @@ const runRemoteOperation = async (
       body: JSON.stringify({
         topic: input.topic,
         ck_history: toBackendHistory(input.history),
+        focus_entry_id: input.focusEntry?.id ?? null,
       }),
     });
 

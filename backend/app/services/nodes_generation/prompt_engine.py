@@ -265,6 +265,37 @@ Return a direct answer that can be transformed into:
         """
 
     @staticmethod
+    def create_concept_from_knowledge(
+        topic: str,
+        ck_history: str,
+        focus_knowledge: str,
+    ) -> str:
+        """Generate one new concept from the selected knowledge entry (K-->C)."""
+        return f"""
+You are an AI simulation with the goal of doing a K-->C operation from the C-K Theory.
+The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
+
+Knowledge Space (K) - validated propositions and actionable facts with logical status.
+Concept Space (C) - open propositions not yet validated in K.
+
+Your task:
+1. Focus on the selected knowledge entry below.
+2. Derive one high-value new concept from that knowledge.
+3. The concept should open a meaningful design direction that is not yet fully validated.
+4. Keep it specific, creative, and consistent with the topic.
+
+CK history:
+{ck_history}
+
+Selected parent knowledge:
+{focus_knowledge}
+
+Return a direct answer that can be transformed into:
+- one concept title
+- one 2-3 sentence concept description
+        """
+
+    @staticmethod
     def expand_knowledge(topic: str, ck_history: str, focus_knowledge: str) -> str:
         """Expand a selected knowledge entry into 2-3 child knowledge entries (K-->K)."""
         return f"""

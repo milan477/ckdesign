@@ -96,14 +96,16 @@ async def create_concept(request: CreateConceptRequest):
     try:
         agent = CKAgent()
         history = [entry.model_dump() for entry in request.ck_history]
-        title, desc = agent.k_to_c(history, request.topic)
+        source_knowledge_id, title, desc = agent.k_to_c(
+            history,
+            request.topic,
+            focus_entry_id=request.focus_entry_id,
+        )
 
         next_concept_index = (
             sum(1 for entry in request.ck_history if entry.type.lower() == "concept") + 1
         )
-        source_knowledge_ids = [
-            entry.id for entry in request.ck_history if entry.type.lower() == "knowledge"
-        ]
+        source_knowledge_ids = [source_knowledge_id] if source_knowledge_id else []
 
         response_payload = {
             "concept": {

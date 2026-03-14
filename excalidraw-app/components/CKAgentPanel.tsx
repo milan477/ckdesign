@@ -3,6 +3,7 @@ import {
   convertToExcalidrawElements,
   newElementWith,
 } from "@excalidraw/excalidraw";
+import { FONT_FAMILY } from "@excalidraw/common";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
@@ -28,7 +29,12 @@ const LABEL_FONT_SIZE = 14;
 const MAX_LABEL_LINE_CHARS = 32;
 const LABEL_LINE_HEIGHT_ESTIMATE = 23;
 const LABEL_VERTICAL_PADDING = 36;
-const COLUMN_DIVIDER_ID = "ck-column-divider";
+const LEGACY_COLUMN_DIVIDER_ID = "ck-column-divider";
+const CONCEPT_COLUMN_BG_ID = "ck-concept-column-bg";
+const KNOWLEDGE_COLUMN_BG_ID = "ck-knowledge-column-bg";
+const COLUMN_BG_EXTENT_X = 20000;
+const COLUMN_BG_Y = -10000;
+const COLUMN_BG_HEIGHT = 20000;
 const NOVEL_MARKER_SIZE = 120;
 const NOVEL_MARKER_OFFSET_X = 70;
 const NOVEL_MARKER_OFFSET_Y = 90;
@@ -78,26 +84,19 @@ const OPERATION_LABELS: Record<CKOperation, string> = {
 const getNodeColors = (
   type: CKNodeType,
   _status: NodeStatus,
-  nodeId?: string,
+  _nodeId?: string,
+  _generated?: boolean,
 ) => {
-  // C0 (initial concept) is blue
-  if (type === "concept" && nodeId === "C0") {
-    return {
-      strokeColor: "#1864ab",
-      backgroundColor: "#e7f5ff",
-    };
-  }
-  // All other concepts are yellow
   if (type === "concept") {
     return {
-      strokeColor: "#c06c00",
-      backgroundColor: "#fff9db",
+      strokeColor: "#f08c00",
+      backgroundColor: "#fff4e6",
     };
   }
-  // Knowledge is green
   return {
-    strokeColor: "#2f9e44",
-    backgroundColor: "#ebfbee",
+    // Keep knowledge entries on the previous blue style.
+    strokeColor: "#1864ab",
+    backgroundColor: "#e7f5ff",
   };
 };
 
@@ -290,8 +289,8 @@ export const CKAgentPanel = ({
   const [latestDecision, setLatestDecision] = useState("");
   const [busyOperation, setBusyOperation] = useState<CKOperation | null>(null);
 
-  const conceptCounterRef = useRef(1);
-  const knowledgeCounterRef = useRef(0);
+  const conceptCounterRef = useRef(0);
+  const knowledgeCounterRef = useRef(-1);
   const elementCounterRef = useRef(1);
   const sequenceRef = useRef(1);
   const childCounterRef = useRef<Record<string, number>>({});
@@ -337,29 +336,6 @@ export const CKAgentPanel = ({
 
     knowledgeCounterRef.current += 1;
     return `K${knowledgeCounterRef.current}`;
-  };
-
-  const syncCounterWithNodeId = (id: string) => {
-    const match = /^([CK])(\d+)$/i.exec(id.trim());
-    if (!match) {
-      return;
-    }
-    const prefix = match[1].toUpperCase();
-    const sequenceNumber = Number.parseInt(match[2], 10);
-    if (!Number.isFinite(sequenceNumber)) {
-      return;
-    }
-    if (prefix === "C") {
-      conceptCounterRef.current = Math.max(
-        conceptCounterRef.current,
-        sequenceNumber,
-      );
-      return;
-    }
-    knowledgeCounterRef.current = Math.max(
-      knowledgeCounterRef.current,
-      sequenceNumber,
-    );
   };
 
   const pruneDeletedGeneratedNodes = (sourceNodes: CKCanvasNode[]) => {
@@ -477,14 +453,20 @@ export const CKAgentPanel = ({
     novelMarkerElementIdRef.current = markerId;
   }
 
-  const deleteNodesFromCanvas = (nodesToDelete: CKCanvasNode[]) => {
+  const deleteNodesFromCanvas = (
+    nodesToDelete: CKCanvasNode[],
+    options?: { removeDivider?: boolean },
+  ) => {
     if (!excalidrawAPI || !nodesToDelete.length) {
       return;
     }
 
     const ids = new Set<string>();
-    // Always clean up the divider when clearing nodes so it can be re-created
-    ids.add(COLUMN_DIVIDER_ID);
+    if (options?.removeDivider) {
+      ids.add(LEGACY_COLUMN_DIVIDER_ID);
+      ids.add(CONCEPT_COLUMN_BG_ID);
+      ids.add(KNOWLEDGE_COLUMN_BG_ID);
+    }
     for (const node of nodesToDelete) {
       ids.add(node.elementId);
       if (node.arrowId) {
@@ -556,27 +538,51 @@ export const CKAgentPanel = ({
 
     const skeleton: ExcalidrawElementSkeleton[] = [];
 
-    // Add divider line if not already live on canvas
-    const hasLiveDivider = liveElementById.has(COLUMN_DIVIDER_ID);
-    if (!hasLiveDivider) {
+    const hasConceptColumnBg = liveElementById.has(CONCEPT_COLUMN_BG_ID);
+    const hasKnowledgeColumnBg = liveElementById.has(KNOWLEDGE_COLUMN_BG_ID);
+    if (!hasConceptColumnBg) {
       skeleton.push({
-        id: COLUMN_DIVIDER_ID,
-        type: "line",
+        id: CONCEPT_COLUMN_BG_ID,
+        type: "rectangle",
+        x: -COLUMN_BG_EXTENT_X,
+        y: COLUMN_BG_Y,
+        width: DIVIDER_X + COLUMN_BG_EXTENT_X,
+        height: COLUMN_BG_HEIGHT,
+        backgroundColor: "#fff9db",
+        strokeColor: "transparent",
+        roughness: 0,
+        strokeWidth: 0,
+        locked: true,
+      });
+    }
+    if (!hasKnowledgeColumnBg) {
+      skeleton.push({
+        id: KNOWLEDGE_COLUMN_BG_ID,
+        type: "rectangle",
         x: DIVIDER_X,
-        y: -10000,
-        width: 0,
-        height: 20000,
-        strokeColor: "#868e96",
+        y: COLUMN_BG_Y,
+        width: COLUMN_BG_EXTENT_X,
+        height: COLUMN_BG_HEIGHT,
+        backgroundColor: "#ebfbee",
+        strokeColor: "transparent",
+        roughness: 0,
+        strokeWidth: 0,
+        locked: true,
       });
     }
 
     for (const node of nodesToAdd) {
-      const colors = getNodeColors(node.type, node.status, node.id);
+      const colors = getNodeColors(
+        node.type,
+        node.status,
+        node.id,
+        node.generated,
+      );
       const labelText = toLabelText(node);
       skeleton.push({
         id: node.elementId,
         type: "rectangle",
-        x: node.x,
+        x: getColumnX(node.type),
         y: node.y,
         width: node.width,
         height: node.height,
@@ -585,6 +591,7 @@ export const CKAgentPanel = ({
         label: {
           text: labelText,
           fontSize: LABEL_FONT_SIZE,
+          fontFamily: FONT_FAMILY.Nunito,
         },
       });
 
@@ -632,13 +639,9 @@ export const CKAgentPanel = ({
           strokeColor: "#495057",
           start: {
             id: parent.elementId,
-            x: startX,
-            y: startY,
           },
           end: {
             id: node.elementId,
-            x: endX,
-            y: endY,
           },
         });
       }
@@ -647,8 +650,41 @@ export const CKAgentPanel = ({
     const generated = convertToExcalidrawElements(skeleton, {
       regenerateIds: false,
     });
+    const hasLegacyDivider = liveElementById.has(LEGACY_COLUMN_DIVIDER_ID);
+    const baseElements = currentElements.map((element) => {
+      if (element.id === LEGACY_COLUMN_DIVIDER_ID && hasLegacyDivider) {
+        return newElementWith(element, { isDeleted: true });
+      }
+      if (element.id === CONCEPT_COLUMN_BG_ID && !element.isDeleted) {
+        return newElementWith(element, {
+          x: -COLUMN_BG_EXTENT_X,
+          y: COLUMN_BG_Y,
+          width: DIVIDER_X + COLUMN_BG_EXTENT_X,
+          height: COLUMN_BG_HEIGHT,
+          backgroundColor: "#fff9db",
+          strokeColor: "transparent",
+          roughness: 0,
+          strokeWidth: 0,
+          locked: true,
+        });
+      }
+      if (element.id === KNOWLEDGE_COLUMN_BG_ID && !element.isDeleted) {
+        return newElementWith(element, {
+          x: DIVIDER_X,
+          y: COLUMN_BG_Y,
+          width: COLUMN_BG_EXTENT_X,
+          height: COLUMN_BG_HEIGHT,
+          backgroundColor: "#ebfbee",
+          strokeColor: "transparent",
+          roughness: 0,
+          strokeWidth: 0,
+          locked: true,
+        });
+      }
+      return element;
+    });
     excalidrawAPI.updateScene({
-      elements: [...currentElements, ...generated],
+      elements: [...baseElements, ...generated],
     });
     if (options?.shouldScroll !== false) {
       excalidrawAPI.scrollToContent(generated, { animate: true });
@@ -662,9 +698,7 @@ export const CKAgentPanel = ({
     desc: string,
     operationRationale: string,
     options?: {
-      id?: string;
       sourceParentIds?: string[];
-      x?: number;
       y?: number;
     },
   ): CKCanvasNode => {
@@ -679,13 +713,7 @@ export const CKAgentPanel = ({
     const step = Math.floor(siblingCount / 2) + 1;
     const direction = siblingCount % 2 === 0 ? 1 : -1;
     const arrowIds = defaultSourceParentIds.map(() => nextElementId("arrow"));
-    const providedId = options?.id?.trim();
-    const hasProvidedId =
-      !!providedId && !nodesRef.current.some((node) => node.id === providedId);
-    const nodeId = hasProvidedId ? providedId! : nextNodeId(type);
-    if (hasProvidedId) {
-      syncCounterWithNodeId(nodeId);
-    }
+    const nodeId = nextNodeId(type);
 
     return {
       id: nodeId,
@@ -694,7 +722,7 @@ export const CKAgentPanel = ({
       desc,
       operationRationale,
       parentId: primaryParentId,
-      x: options?.x ?? getColumnX(type),
+      x: getColumnX(type),
       y:
         options?.y ??
         (type === parent.type
@@ -730,7 +758,7 @@ export const CKAgentPanel = ({
     const shouldRenderRoot = concept.length > 0 || knowledgeEntries.length > 0;
     if (!shouldRenderRoot) {
       if (prevNodes.length) {
-        deleteNodesFromCanvas(prevNodes);
+        deleteNodesFromCanvas(prevNodes, { removeDivider: true });
       }
       setNodes([]);
       setSelectedNodeId(null);
@@ -739,11 +767,11 @@ export const CKAgentPanel = ({
     }
 
     const positionById = new Map(
-      prevInitialNodes.map((node) => [node.id, { x: node.x, y: node.y }]),
+      prevInitialNodes.map((node) => [node.id, { y: node.y }]),
     );
 
-    conceptCounterRef.current = 1;
-    knowledgeCounterRef.current = knowledgeEntries.length;
+    conceptCounterRef.current = 0;
+    knowledgeCounterRef.current = Math.max(-1, knowledgeEntries.length - 1);
     childCounterRef.current = {};
     sequenceRef.current = 1;
 
@@ -754,7 +782,7 @@ export const CKAgentPanel = ({
       desc: "Initial concept provided by user.",
       operationRationale: "User-defined starting concept.",
       parentId: null,
-      x: positionById.get("C0")?.x ?? CONCEPT_COLUMN_X,
+      x: CONCEPT_COLUMN_X,
       y: positionById.get("C0")?.y ?? ROOT_Y,
       width: NODE_WIDTH,
       height: estimateNodeHeight(
@@ -773,7 +801,7 @@ export const CKAgentPanel = ({
     };
 
     const knowledgeNodes = knowledgeEntries.map((entry, index) => {
-      const id = `K${index + 1}`;
+      const id = `K${index}`;
       return {
         id,
         type: "knowledge" as const,
@@ -781,7 +809,7 @@ export const CKAgentPanel = ({
         desc: "Initial knowledge provided by user.",
         operationRationale: "User-defined initial knowledge.",
         parentId: rootNode.id,
-        x: positionById.get(id)?.x ?? KNOWLEDGE_COLUMN_X,
+        x: KNOWLEDGE_COLUMN_X,
         y:
           positionById.get(id)?.y ??
           ROOT_Y -
@@ -857,7 +885,7 @@ export const CKAgentPanel = ({
       }
 
       const selectedRaw = window.prompt(
-        `Enter knowledge number for CreateConcept (e.g., 2 for K2).\nAvailable: ${knowledgeNodes
+        `Enter knowledge number for CreateConcept (e.g., 0 for K0).\nAvailable: ${knowledgeNodes
           .map((node) => node.id)
           .join(", ")}`,
       );
@@ -867,7 +895,7 @@ export const CKAgentPanel = ({
       const selectedId = parseNodeSelectionId(selectedRaw, "K");
       if (!selectedId) {
         toast(
-          "Invalid knowledge number. Use a number like 2 or an ID like K2.",
+          "Invalid knowledge number. Use a number like 0 or an ID like K0.",
         );
         return;
       }
@@ -966,7 +994,7 @@ export const CKAgentPanel = ({
       }
 
       const selectedRaw = window.prompt(
-        `Enter knowledge number for ExpandKnowledge (e.g., 2 for K2).\nAvailable: ${knowledgeNodes
+        `Enter knowledge number for ExpandKnowledge (e.g., 0 for K0).\nAvailable: ${knowledgeNodes
           .map((node) => node.id)
           .join(", ")}`,
       );
@@ -976,7 +1004,7 @@ export const CKAgentPanel = ({
       const selectedId = parseNodeSelectionId(selectedRaw, "K");
       if (!selectedId) {
         toast(
-          "Invalid knowledge number. Use a number like 2 or an ID like K2.",
+          "Invalid knowledge number. Use a number like 0 or an ID like K0.",
         );
         return;
       }
@@ -1097,13 +1125,9 @@ export const CKAgentPanel = ({
             entry.operationRationale,
             sourceKnowledgeIds.length
               ? {
-                  id: entry.id,
                   sourceParentIds: sourceKnowledgeIds,
-                  x: getColumnX(entry.type),
                   y: averageY,
                 }
-              : entry.id
-              ? { id: entry.id }
               : undefined,
           );
         });
@@ -1142,7 +1166,12 @@ export const CKAgentPanel = ({
       prev.map((node) => (node.id === selectedNode.id ? updated : node)),
     );
 
-    const colors = getNodeColors(updated.type, updated.status, updated.id);
+    const colors = getNodeColors(
+      updated.type,
+      updated.status,
+      updated.id,
+      updated.generated,
+    );
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
     const nextElements = currentElements.map((element) =>
       element.id === updated.elementId

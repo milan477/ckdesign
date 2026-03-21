@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CaptureUpdateAction,
   convertToExcalidrawElements,
   newElementWith,
 } from "@excalidraw/excalidraw";
@@ -242,23 +243,6 @@ const reorderByIds = (
   );
 };
 
-const parseNodeSelectionId = (rawInput: string, expectedPrefix: "C" | "K") => {
-  const normalized = rawInput.trim().toUpperCase();
-  if (!normalized) {
-    return null;
-  }
-
-  const suffix = normalized.startsWith(expectedPrefix)
-    ? normalized.slice(1).trim()
-    : normalized;
-
-  if (!/^\d+$/.test(suffix)) {
-    return null;
-  }
-
-  return `${expectedPrefix}${Number.parseInt(suffix, 10)}`;
-};
-
 const parseExpandCount = (rawInput: string) => {
   const normalized = rawInput.trim();
   if (!/^\d+$/.test(normalized)) {
@@ -269,6 +253,20 @@ const parseExpandCount = (rawInput: string) => {
     return null;
   }
   return value;
+};
+
+const getRequiredFocusType = (operation: CKOperation): CKNodeType | null => {
+  switch (operation) {
+    case "CreateConcept":
+    case "ExpandKnowledge":
+      return "knowledge";
+    case "CreateKnowledge":
+    case "ExpandConcept":
+    case "ValidateConcept":
+      return "concept";
+    default:
+      return null;
+  }
 };
 
 const hasContainerId = (
@@ -310,6 +308,63 @@ export const CKAgentPanel = ({
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
+
+  const syncSelectedNodeFromCanvas = (
+    selectedElementIds: Readonly<Record<string, true>> | undefined,
+  ) => {
+    const selectedIds = new Set(Object.keys(selectedElementIds || {}));
+    const matchedNodes = nodesRef.current.filter((node) =>
+      selectedIds.has(node.elementId),
+    );
+
+    if (matchedNodes.length === 1) {
+      setSelectedNodeId(matchedNodes[0].id);
+      return;
+    }
+
+    setSelectedNodeId(null);
+  };
+
+  const selectNodeOnCanvas = (nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    const nextSelectedNode = nodeId
+      ? nodesRef.current.find((node) => node.id === nodeId) || null
+      : null;
+
+    excalidrawAPI.updateScene({
+      appState: {
+        selectedElementIds: nextSelectedNode
+          ? { [nextSelectedNode.elementId]: true }
+          : {},
+      },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  };
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
+
+    return excalidrawAPI.onChange((_elements, appState) => {
+      syncSelectedNodeFromCanvas(appState.selectedElementIds);
+    });
+  }, [excalidrawAPI]);
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
+  }, [excalidrawAPI, nodes]);
 
   const pushTranscript = (messages: CKAgentMessage[]) => {
     if (!messages.length) {
@@ -761,7 +816,8 @@ export const CKAgentPanel = ({
         deleteNodesFromCanvas(prevNodes, { removeDivider: true });
       }
       setNodes([]);
-      setSelectedNodeId(null);
+      nodesRef.current = [];
+      selectNodeOnCanvas(null);
       setLatestDecision("");
       return;
     }
@@ -840,10 +896,11 @@ export const CKAgentPanel = ({
     }
     addNodesToCanvas(nextNodes, [], { shouldScroll: false });
     setNodes(nextNodes);
-    setSelectedNodeId((prevSelected) =>
-      nextNodes.some((node) => node.id === prevSelected)
-        ? prevSelected
-        : rootNode.id,
+    nodesRef.current = nextNodes;
+    selectNodeOnCanvas(
+      nextNodes.some((node) => node.id === selectedNodeId)
+        ? selectedNodeId
+        : null,
     );
     setTranscript([]);
     setLatestDecision("");
@@ -865,6 +922,7 @@ export const CKAgentPanel = ({
     const selectedFocusNode = selectedNodeId
       ? currentNodes.find((node) => node.id === selectedNodeId) || null
       : null;
+    const requiredFocusType = getRequiredFocusType(operation);
 
     const latestConceptNode =
       [...currentNodes].reverse().find((node) => node.type === "concept") ||
@@ -875,102 +933,28 @@ export const CKAgentPanel = ({
 
     let focusNode: CKCanvasNode | null;
     let expandCount: number | undefined;
-    if (operation === "CreateConcept") {
-      const knowledgeNodes = currentNodes.filter(
-        (node) => node.type === "knowledge",
-      );
-      if (!knowledgeNodes.length) {
-        toast("No knowledge entries available.");
-        return;
-      }
-
-      const selectedRaw = window.prompt(
-        `Enter knowledge number for CreateConcept (e.g., 0 for K0).\nAvailable: ${knowledgeNodes
-          .map((node) => node.id)
-          .join(", ")}`,
-      );
-      if (selectedRaw === null) {
-        return;
-      }
-      const selectedId = parseNodeSelectionId(selectedRaw, "K");
-      if (!selectedId) {
+    if (requiredFocusType) {
+      if (!selectedFocusNode || selectedFocusNode.type !== requiredFocusType) {
         toast(
-          "Invalid knowledge number. Use a number like 0 or an ID like K0.",
+          `Select a ${requiredFocusType} node on the canvas to run ${operation}.`,
         );
         return;
       }
-
+      focusNode = selectedFocusNode;
+    } else if (operation === "DecideNovelConcept") {
       focusNode =
-        knowledgeNodes.find(
-          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
-        ) || null;
-      if (!focusNode) {
-        toast(`Knowledge ${selectedId} not found in current history.`);
-        return;
-      }
-    } else if (operation === "CreateKnowledge") {
-      const conceptNodes = currentNodes.filter(
-        (node) => node.type === "concept",
-      );
-      if (!conceptNodes.length) {
-        toast("No concept entries available.");
-        return;
-      }
+        (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
+        latestConceptNode;
+    } else {
+      focusNode = selectedFocusNode || latestConceptNode || latestKnowledgeNode;
+    }
 
-      const selectedRaw = window.prompt(
-        `Enter concept number for CreateKnowledge (e.g., 1 for C1).\nAvailable: ${conceptNodes
-          .map((node) => node.id)
-          .join(", ")}`,
-      );
-      if (selectedRaw === null) {
-        return;
-      }
-      const selectedId = parseNodeSelectionId(selectedRaw, "C");
-      if (!selectedId) {
-        toast("Invalid concept number. Use a number like 1 or an ID like C1.");
-        return;
-      }
+    if (!focusNode) {
+      toast("Select a node or initialize the session.");
+      return;
+    }
 
-      focusNode =
-        conceptNodes.find(
-          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
-        ) || null;
-      if (!focusNode) {
-        toast(`Concept ${selectedId} not found in current history.`);
-        return;
-      }
-    } else if (operation === "ExpandConcept") {
-      const conceptNodes = currentNodes.filter(
-        (node) => node.type === "concept",
-      );
-      if (!conceptNodes.length) {
-        toast("No concept entries available.");
-        return;
-      }
-
-      const selectedRaw = window.prompt(
-        `Enter concept number for ExpandConcept (e.g., 1 for C1).\nAvailable: ${conceptNodes
-          .map((node) => node.id)
-          .join(", ")}`,
-      );
-      if (selectedRaw === null) {
-        return;
-      }
-      const selectedId = parseNodeSelectionId(selectedRaw, "C");
-      if (!selectedId) {
-        toast("Invalid concept number. Use a number like 1 or an ID like C1.");
-        return;
-      }
-
-      focusNode =
-        conceptNodes.find(
-          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
-        ) || null;
-      if (!focusNode) {
-        toast(`Concept ${selectedId} not found in current history.`);
-        return;
-      }
-
+    if (operation === "ExpandConcept") {
       const countRaw = window.prompt(
         "How many concept entries to generate? (1-5)",
         "2",
@@ -985,39 +969,6 @@ export const CKAgentPanel = ({
       }
       expandCount = parsedCount;
     } else if (operation === "ExpandKnowledge") {
-      const knowledgeNodes = currentNodes.filter(
-        (node) => node.type === "knowledge",
-      );
-      if (!knowledgeNodes.length) {
-        toast("No knowledge entries available.");
-        return;
-      }
-
-      const selectedRaw = window.prompt(
-        `Enter knowledge number for ExpandKnowledge (e.g., 0 for K0).\nAvailable: ${knowledgeNodes
-          .map((node) => node.id)
-          .join(", ")}`,
-      );
-      if (selectedRaw === null) {
-        return;
-      }
-      const selectedId = parseNodeSelectionId(selectedRaw, "K");
-      if (!selectedId) {
-        toast(
-          "Invalid knowledge number. Use a number like 0 or an ID like K0.",
-        );
-        return;
-      }
-
-      focusNode =
-        knowledgeNodes.find(
-          (node) => node.id.toUpperCase() === selectedId.toUpperCase(),
-        ) || null;
-      if (!focusNode) {
-        toast(`Knowledge ${selectedId} not found in current history.`);
-        return;
-      }
-
       const countRaw = window.prompt(
         "How many knowledge entries to generate? (1-5)",
         "2",
@@ -1031,17 +982,6 @@ export const CKAgentPanel = ({
         return;
       }
       expandCount = parsedCount;
-    } else if (operation === "DecideNovelConcept") {
-      focusNode =
-        (selectedFocusNode?.type === "concept" ? selectedFocusNode : null) ||
-        latestConceptNode;
-    } else {
-      focusNode = selectedFocusNode || latestConceptNode || latestKnowledgeNode;
-    }
-
-    if (!focusNode) {
-      toast("Select a node or initialize the session.");
-      return;
     }
 
     setBusyOperation(operation);
@@ -1085,7 +1025,7 @@ export const CKAgentPanel = ({
         setLatestDecision(
           `Best concept: ${result.noveltyDecision.selectedConceptId}${scoreText}. ${result.noveltyDecision.rationale}`,
         );
-        setSelectedNodeId(result.noveltyDecision.selectedConceptId);
+        selectNodeOnCanvas(result.noveltyDecision.selectedConceptId);
         markNovelConceptOnCanvas(result.noveltyDecision.selectedConceptId);
       }
 
@@ -1132,9 +1072,9 @@ export const CKAgentPanel = ({
           );
         });
 
-        setNodes((prev) => [...prev, ...generatedNodes]);
-        nodesRef.current = [...currentNodes, ...generatedNodes];
-        setSelectedNodeId(generatedNodes[generatedNodes.length - 1].id);
+        const nextNodes = [...currentNodes, ...generatedNodes];
+        setNodes(nextNodes);
+        nodesRef.current = nextNodes;
         const resultLabel =
           generatedNodes[0].type === "knowledge"
             ? "knowledge nodes"
@@ -1145,6 +1085,7 @@ export const CKAgentPanel = ({
             : generatedNodes[0].operationRationale,
         );
         addNodesToCanvas(generatedNodes, currentNodes);
+        selectNodeOnCanvas(generatedNodes[generatedNodes.length - 1].id);
       }
     } catch (error) {
       toast(
@@ -1217,8 +1158,10 @@ export const CKAgentPanel = ({
     );
     deleteNodesFromCanvas(nodesToDelete);
 
-    setNodes((prev) => prev.filter((node) => !idsToRemove.has(node.id)));
-    setSelectedNodeId(selectedNode.parentId || null);
+    const nextNodes = nodes.filter((node) => !idsToRemove.has(node.id));
+    setNodes(nextNodes);
+    nodesRef.current = nextNodes;
+    selectNodeOnCanvas(selectedNode.parentId || null);
     setLatestDecision(`${selectedNode.id} rejected and removed.`);
   };
 
@@ -1290,13 +1233,23 @@ export const CKAgentPanel = ({
 
       <div className="ck-agent-section">
         <div className="ck-agent-subtitle">Actions</div>
+        <div className="ck-hint-text">
+          {selectedNode
+            ? `Selected ${selectedNode.type}: ${selectedNode.id}.`
+            : "Select a single canvas node to enable type-specific actions."}
+        </div>
         <div className="ck-actions-grid">
           {ACTIONS.map((operation) => (
             <button
               key={operation}
               type="button"
               className="ck-action-button"
-              disabled={!canRunOperations || busyOperation !== null}
+              disabled={
+                !canRunOperations ||
+                busyOperation !== null ||
+                (getRequiredFocusType(operation) !== null &&
+                  selectedNode?.type !== getRequiredFocusType(operation))
+              }
               onClick={() => runOperation(operation)}
             >
               {busyOperation === operation
@@ -1342,7 +1295,7 @@ export const CKAgentPanel = ({
               className={`ck-node-item ${
                 selectedNodeId === node.id ? "is-selected" : ""
               }`}
-              onClick={() => setSelectedNodeId(node.id)}
+              onClick={() => selectNodeOnCanvas(node.id)}
             >
               <span>{node.id}</span>
               <span>{node.title}</span>

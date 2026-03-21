@@ -340,6 +340,14 @@ class CKAgent:
             target_count=target_count,
         )
 
+    def validate_concept(self, ck_history, topic, focus_entry_id=None):
+        """Validate one concept against the current knowledge entries."""
+        return self.knowledge_agent.ValidateConcept(
+            ck_history,
+            topic,
+            focus_entry_id=focus_entry_id,
+        )
+
     def get_k(self, topic):
         """Initialize knowledge entries"""
 

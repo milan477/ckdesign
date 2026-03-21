@@ -21,6 +21,11 @@ class KnowledgeAgent:
         r"(?:\r?\n)+\s*RATIONALE:\s*(?P<rationale>[^\r\n]+)",
         re.IGNORECASE,
     )
+    _VALIDATION_PATTERN = re.compile(
+        r"^\s*VERDICT:\s*(?P<verdict>VALID|INVALID)\s*$"
+        r"(?:\r?\n)+\s*RATIONALE:\s*(?P<rationale>.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
 
     def __init__(self, llm_model: str = "gpt-4.1", ai_client: OpenAIClient = None):
         self.ai = ai_client or OpenAIClient(llm_model=llm_model)
@@ -99,6 +104,24 @@ class KnowledgeAgent:
             )
 
         return entries
+
+    @classmethod
+    def _parse_validation_result(cls, content):
+        match = cls._VALIDATION_PATTERN.search(content or "")
+        if not match:
+            raise ValueError("Failed to parse validation model response.")
+
+        verdict = cls._normalize_field(match.group("verdict")).upper()
+        rationale = cls._normalize_field(match.group("rationale"))
+        if verdict not in {"VALID", "INVALID"}:
+            raise ValueError(f"Unsupported validation verdict: {verdict}")
+        if not rationale:
+            raise ValueError("Validation response is missing rationale.")
+
+        return {
+            "is_valid": verdict == "VALID",
+            "rationale": rationale,
+        }
 
     def CreateKnowledge(self, ck_history, topic, focus_entry_id=None):
         history = [self._entry_to_dict(entry) for entry in ck_history]
@@ -202,5 +225,51 @@ class KnowledgeAgent:
     def ReorderKnowledge(self, *args, **kwargs):
         raise NotImplementedError("ReorderKnowledge is not implemented yet.")
 
-    def ValidateConcept(self, *args, **kwargs):
-        raise NotImplementedError("ValidateConcept is not implemented yet.")
+    def ValidateConcept(self, ck_history, topic, focus_entry_id=None):
+        history = [self._entry_to_dict(entry) for entry in ck_history]
+        concept_entries = [
+            entry for entry in history if str(entry.get("type", "")).lower() == "concept"
+        ]
+        knowledge_entries = [
+            entry for entry in history if str(entry.get("type", "")).lower() == "knowledge"
+        ]
+
+        if not concept_entries:
+            raise ValueError("ValidateConcept requires at least one concept in ck_history.")
+        if not knowledge_entries:
+            raise ValueError("ValidateConcept requires at least one knowledge entry in ck_history.")
+
+        focus_concept = None
+        if focus_entry_id:
+            focus_concept = next(
+                (
+                    entry
+                    for entry in concept_entries
+                    if str(entry.get("id", "")).strip() == str(focus_entry_id).strip()
+                ),
+                None,
+            )
+        if focus_concept is None:
+            focus_concept = concept_entries[-1]
+
+        prompt = CKPromptEngine.validate_concept(
+            topic,
+            json.dumps(history, indent=2),
+            json.dumps(focus_concept, indent=2),
+        )
+
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+
+        parsed = self._parse_validation_result(response.choices[0].message.content)
+        return {
+            "concept_id": focus_concept.get("id", ""),
+            "is_valid": parsed["is_valid"],
+            "rationale": parsed["rationale"],
+        }

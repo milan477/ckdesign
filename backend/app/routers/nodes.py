@@ -14,6 +14,8 @@ from backend.app.schemas.node import (
     ExpandConceptResponse,
     ExpandKnowledgeRequest,
     ExpandKnowledgeResponse,
+    ValidateConceptRequest,
+    ValidateConceptResponse,
     NodeGenerateRequest,
     NodeOut,
     ReorderRequest,
@@ -242,6 +244,24 @@ async def expand_knowledge(request: ExpandKnowledgeRequest):
         return response_payload
     except Exception as e:
         logger.error("Error in expand_knowledge: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/validate-concept", response_model=ValidateConceptResponse)
+async def validate_concept(request: ValidateConceptRequest):
+    """Validate a selected concept against the current knowledge entries."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        validation = agent.validate_concept(
+            history,
+            request.topic,
+            focus_entry_id=request.focus_entry_id,
+        )
+        logger.info("validate_concept response: %s", validation)
+        return validation
+    except Exception as e:
+        logger.error("Error in validate_concept: %s", str(e))
         return {"error": str(e)}
 
 

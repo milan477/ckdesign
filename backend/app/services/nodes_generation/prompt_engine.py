@@ -364,6 +364,45 @@ Rules:
         """
 
     @staticmethod
+    def validate_concept(
+        topic: str,
+        ck_history: str,
+        focus_concept: str,
+    ) -> str:
+        """Validate a selected concept against the current knowledge space."""
+        return f"""
+You are an AI simulation with the goal of validating a concept using C-K Theory.
+The topic you are working on is to {topic}. You are highly knowledgeable in this topic area.
+
+Knowledge Space (K) - validated propositions and actionable facts with logical status.
+Concept Space (C) - open propositions not yet validated in K.
+
+Your task:
+1. Focus on the selected concept shown below.
+2. Evaluate whether the concept is sufficiently supported by the existing knowledge entries in CK history.
+3. Mark the concept as VALID only if the current knowledge strongly supports it as feasible and coherent.
+4. Mark the concept as INVALID if the current knowledge contradicts it, leaves critical gaps, or does not support implementation yet.
+5. Base your reasoning only on the provided CK history.
+
+CK history:
+{ck_history}
+
+Selected concept:
+{focus_concept}
+
+Return plain text only in this exact template:
+VERDICT: VALID or INVALID
+RATIONALE: <single-line 2-4 sentence explanation grounded in the existing knowledge>
+
+Rules:
+- Keep every field on a single line.
+- Use exactly VALID or INVALID for the verdict.
+- Do not use JSON.
+- Do not use markdown.
+- Do not add any extra commentary before or after the template.
+        """
+
+    @staticmethod
     def initialize_knowledge_entries(topic: str) -> str:
         """Prompt to generate initial knowledge entries based on topic"""
         return f"""

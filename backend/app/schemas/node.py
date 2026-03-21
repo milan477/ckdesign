@@ -86,6 +86,18 @@ class ExpandKnowledgeResponse(BaseModel):
     knowledges: List[CKEntry]
 
 
+class ValidateConceptRequest(BaseModel):
+    topic: str
+    ck_history: List[CKEntry]
+    focus_entry_id: Optional[str] = None
+
+
+class ValidateConceptResponse(BaseModel):
+    concept_id: str
+    is_valid: bool
+    rationale: str
+
+
 class NovelConceptScores(BaseModel):
     novelty: float
     feasibility: float

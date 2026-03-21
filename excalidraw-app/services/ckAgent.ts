@@ -54,6 +54,11 @@ export interface CKOperationResult {
   generatedEntry?: CKGeneratedEntry;
   generatedEntries?: CKGeneratedEntry[];
   reorderedIds?: string[];
+  validationDecision?: {
+    conceptId: string;
+    isValid: boolean;
+    rationale: string;
+  };
   noveltyDecision?: {
     selectedConceptId: string;
     rationale: string;
@@ -88,33 +93,6 @@ const parseConceptDescriptionPayload = (text: string) => {
   return { parsedTitle, parsedDesc };
 };
 
-const normalizeGeneratedEntry = (
-  entry: Record<string, unknown>,
-): CKGeneratedEntry | undefined => {
-  if (
-    (entry.type !== "concept" && entry.type !== "knowledge") ||
-    typeof entry.title !== "string" ||
-    typeof entry.desc !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    id: typeof entry.id === "string" ? entry.id : undefined,
-    type: entry.type,
-    title: entry.title,
-    desc: entry.desc,
-    operationRationale:
-      typeof entry.operationRationale === "string"
-        ? entry.operationRationale
-        : "Generated via CK operation.",
-    sourceKnowledgeIds: Array.isArray(entry.sourceKnowledgeIds)
-      ? entry.sourceKnowledgeIds.filter(
-          (id): id is string => typeof id === "string",
-        )
-      : undefined,
-  };
-};
-
 const toBackendHistory = (history: CKEntryContext[]) =>
   history.map((entry) => ({
     id: entry.id,
@@ -136,128 +114,10 @@ const readResponseError = async (response: Response) => {
   return response.statusText || `HTTP ${response.status}`;
 };
 
-const normalizeRemoteResult = (payload: unknown): CKOperationResult | null => {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-
-  const data = payload as Record<string, unknown>;
-
-  const dialogue = Array.isArray(data.dialogue)
-    ? data.dialogue
-        .map((entry) => {
-          if (!entry || typeof entry !== "object") {
-            return null;
-          }
-          const obj = entry as Record<string, unknown>;
-          if (
-            (obj.speaker !== "concept-agent" &&
-              obj.speaker !== "knowledge-agent") ||
-            typeof obj.content !== "string"
-          ) {
-            return null;
-          }
-          return {
-            speaker: obj.speaker,
-            content: obj.content,
-          } as CKAgentMessage;
-        })
-        .filter((entry): entry is CKAgentMessage => !!entry)
-    : [];
-
-  const generatedEntry =
-    data.generatedEntry &&
-    typeof data.generatedEntry === "object" &&
-    data.generatedEntry !== null
-      ? (() => {
-          return normalizeGeneratedEntry(
-            data.generatedEntry as Record<string, unknown>,
-          );
-        })()
-      : undefined;
-
-  const generatedEntries = Array.isArray(data.generatedEntries)
-    ? data.generatedEntries
-        .map((entry) =>
-          entry && typeof entry === "object"
-            ? normalizeGeneratedEntry(entry as Record<string, unknown>)
-            : undefined,
-        )
-        .filter((entry): entry is CKGeneratedEntry => !!entry)
-    : undefined;
-
-  const reorderedIds = Array.isArray(data.reorderedIds)
-    ? data.reorderedIds.filter((id): id is string => typeof id === "string")
-    : undefined;
-
-  const noveltyDecision =
-    data.noveltyDecision &&
-    typeof data.noveltyDecision === "object" &&
-    data.noveltyDecision !== null
-      ? (() => {
-          const decision = data.noveltyDecision as Record<string, unknown>;
-          if (
-            typeof decision.selectedConceptId !== "string" ||
-            typeof decision.rationale !== "string"
-          ) {
-            return undefined;
-          }
-          const scores =
-            decision.scores &&
-            typeof decision.scores === "object" &&
-            decision.scores !== null
-              ? (() => {
-                  const rawScores = decision.scores as Record<string, unknown>;
-                  if (
-                    typeof rawScores.novelty !== "number" ||
-                    typeof rawScores.feasibility !== "number" ||
-                    typeof rawScores.usefulness !== "number" ||
-                    typeof rawScores.clarity !== "number"
-                  ) {
-                    return undefined;
-                  }
-                  return {
-                    novelty: rawScores.novelty,
-                    feasibility: rawScores.feasibility,
-                    usefulness: rawScores.usefulness,
-                    clarity: rawScores.clarity,
-                  } as CKNoveltyScores;
-                })()
-              : undefined;
-          return {
-            selectedConceptId: decision.selectedConceptId,
-            rationale: decision.rationale,
-            scores,
-          };
-        })()
-      : undefined;
-
-  if (
-    !generatedEntry &&
-    !(generatedEntries && generatedEntries.length) &&
-    !reorderedIds &&
-    !noveltyDecision &&
-    dialogue.length === 0
-  ) {
-    return null;
-  }
-
-  return {
-    generatedEntry,
-    generatedEntries,
-    reorderedIds,
-    noveltyDecision,
-    dialogue,
-  };
-};
-
 const runRemoteOperation = async (
   input: CKOperationInput,
   base: string,
 ): Promise<CKOperationResult> => {
-  let operateEndpointUnavailable = false;
-  let operateResponse: Response | null = null;
-
   // try {
   //   operateResponse = await fetch(`${base}/v1/ai/ck/operate`, {
   //     method: "POST",
@@ -603,6 +463,55 @@ const runRemoteOperation = async (
     };
   }
 
+  if (input.operation === "ValidateConcept") {
+    const response = await fetch(`${base}/nodes/validate-concept`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+        focus_entry_id: input.focusEntry?.id ?? null,
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/validate-concept failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      concept_id?: string;
+      is_valid?: boolean;
+      rationale?: string;
+    };
+
+    if (
+      typeof payload.concept_id !== "string" ||
+      !payload.concept_id.trim() ||
+      typeof payload.is_valid !== "boolean" ||
+      typeof payload.rationale !== "string"
+    ) {
+      throw new Error("Invalid response payload from /nodes/validate-concept.");
+    }
+
+    return {
+      validationDecision: {
+        conceptId: payload.concept_id,
+        isValid: payload.is_valid,
+        rationale: payload.rationale,
+      },
+      dialogue: [],
+    };
+  }
+
   if (input.operation === "ExpandKnowledge") {
     const response = await fetch(`${base}/nodes/expand-knowledge`, {
       method: "POST",
@@ -666,10 +575,6 @@ const runRemoteOperation = async (
       generatedEntries,
       dialogue: [],
     };
-  }
-
-  if (operateEndpointUnavailable) {
-    throw getNotImplementedError(input.operation);
   }
 
   throw new Error(`Unsupported operation: ${input.operation}`);

@@ -38,6 +38,9 @@ const COLUMN_BG_HEIGHT = 20000;
 const NOVEL_MARKER_SIZE = 120;
 const NOVEL_MARKER_OFFSET_X = 70;
 const NOVEL_MARKER_OFFSET_Y = 90;
+const VALIDATION_MARKER_SIZE = 56;
+const VALIDATION_MARKER_OFFSET_X = 32;
+const VALIDATION_MARKER_OFFSET_Y = 18;
 
 type NodeStatus = "pending" | "accepted";
 
@@ -290,6 +293,7 @@ export const CKAgentPanel = ({
   const nodesRef = useRef<CKCanvasNode[]>([]);
   const novelConceptIdRef = useRef<string | null>(null);
   const novelMarkerElementIdRef = useRef<string | null>(null);
+  const validationMarkerElementIdsRef = useRef<Record<string, string>>({});
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -394,6 +398,23 @@ export const CKAgentPanel = ({
     ) {
       clearNovelMarkerFromCanvas();
     }
+    for (const [conceptId, markerId] of Object.entries(
+      validationMarkerElementIdsRef.current,
+    )) {
+      if (
+        !pruned.some((node) => node.id === conceptId && node.type === "concept")
+      ) {
+        const currentElements =
+          excalidrawAPI.getSceneElementsIncludingDeleted();
+        const updatedElements = currentElements.map((element) =>
+          element.id === markerId
+            ? newElementWith(element, { isDeleted: true })
+            : element,
+        );
+        excalidrawAPI.updateScene({ elements: updatedElements });
+        delete validationMarkerElementIdsRef.current[conceptId];
+      }
+    }
 
     if (pruned.length !== sourceNodes.length) {
       setNodes(pruned);
@@ -428,6 +449,102 @@ export const CKAgentPanel = ({
     excalidrawAPI.updateScene({ elements: updatedElements });
     novelConceptIdRef.current = null;
     novelMarkerElementIdRef.current = null;
+  }
+
+  function clearValidationMarkerFromCanvas(conceptId?: string) {
+    if (!excalidrawAPI) {
+      if (conceptId) {
+        delete validationMarkerElementIdsRef.current[conceptId];
+      } else {
+        validationMarkerElementIdsRef.current = {};
+      }
+      return;
+    }
+
+    const conceptIds = conceptId
+      ? [conceptId]
+      : Object.keys(validationMarkerElementIdsRef.current);
+    if (!conceptIds.length) {
+      return;
+    }
+
+    const markerIds = conceptIds
+      .map((id) => validationMarkerElementIdsRef.current[id])
+      .filter(Boolean);
+    if (!markerIds.length) {
+      return;
+    }
+
+    const markerIdSet = new Set(markerIds);
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const updatedElements = currentElements.map((element) =>
+      markerIdSet.has(element.id)
+        ? newElementWith(element, { isDeleted: true })
+        : element,
+    );
+    excalidrawAPI.updateScene({ elements: updatedElements });
+
+    for (const id of conceptIds) {
+      delete validationMarkerElementIdsRef.current[id];
+    }
+  }
+
+  function markValidationOnCanvas(conceptId: string, isValid: boolean) {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const targetNode = nodesRef.current.find(
+      (node) => node.id === conceptId && node.type === "concept",
+    );
+    if (!targetNode) {
+      toast(`Could not find concept ${conceptId} on canvas.`);
+      return;
+    }
+
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const updatedElements = [...currentElements];
+    const previousMarkerId = validationMarkerElementIdsRef.current[conceptId];
+    if (previousMarkerId) {
+      for (let i = 0; i < updatedElements.length; i++) {
+        if (updatedElements[i].id === previousMarkerId) {
+          updatedElements[i] = newElementWith(updatedElements[i], {
+            isDeleted: true,
+          });
+          break;
+        }
+      }
+    }
+
+    const liveNodeElement = currentElements.find(
+      (element) => element.id === targetNode.elementId && !element.isDeleted,
+    );
+    const markerX =
+      (liveNodeElement?.x ?? targetNode.x) +
+      (liveNodeElement?.width ?? targetNode.width) -
+      VALIDATION_MARKER_OFFSET_X;
+    const markerY =
+      (liveNodeElement?.y ?? targetNode.y) - VALIDATION_MARKER_OFFSET_Y;
+    const markerId = nextElementId("validation");
+    const marker = convertToExcalidrawElements(
+      [
+        {
+          id: markerId,
+          type: "text",
+          x: markerX,
+          y: markerY,
+          text: isValid ? "✓" : "X",
+          fontSize: VALIDATION_MARKER_SIZE,
+          strokeColor: isValid ? "#2b8a3e" : "#c92a2a",
+          roughness: 0,
+        },
+      ],
+      { regenerateIds: false },
+    );
+
+    excalidrawAPI.updateScene({
+      elements: [...updatedElements, ...marker],
+    });
+    validationMarkerElementIdsRef.current[conceptId] = markerId;
   }
 
   function markNovelConceptOnCanvas(conceptId: string) {
@@ -519,6 +636,16 @@ export const CKAgentPanel = ({
       ids.add(novelMarkerElementIdRef.current);
       novelConceptIdRef.current = null;
       novelMarkerElementIdRef.current = null;
+    }
+    for (const node of nodesToDelete) {
+      if (node.type !== "concept") {
+        continue;
+      }
+      const validationMarkerId = validationMarkerElementIdsRef.current[node.id];
+      if (validationMarkerId) {
+        ids.add(validationMarkerId);
+        delete validationMarkerElementIdsRef.current[node.id];
+      }
     }
 
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -800,6 +927,7 @@ export const CKAgentPanel = ({
       selectNodeOnCanvas(null);
       setLatestDecision("");
       setLatestRationale("");
+      clearValidationMarkerFromCanvas();
       return;
     }
 
@@ -990,6 +1118,20 @@ export const CKAgentPanel = ({
         );
         setLatestDecision(`${operation} completed.`);
         setLatestRationale("");
+      }
+
+      if (result.validationDecision) {
+        setLatestDecision(
+          result.validationDecision.isValid
+            ? `${result.validationDecision.conceptId} is supported by the current knowledge.`
+            : `${result.validationDecision.conceptId} is not supported by the current knowledge.`,
+        );
+        setLatestRationale(result.validationDecision.rationale);
+        selectNodeOnCanvas(result.validationDecision.conceptId);
+        markValidationOnCanvas(
+          result.validationDecision.conceptId,
+          result.validationDecision.isValid,
+        );
       }
 
       if (result.noveltyDecision) {

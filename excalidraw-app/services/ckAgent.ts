@@ -24,6 +24,7 @@ export interface CKEntryContext {
   desc: string;
   operationRationale: string;
   parentId: string | null;
+  sourceParentIds?: string[];
 }
 
 export interface CKOperationInput {
@@ -50,10 +51,28 @@ export interface CKNoveltyScores {
   clarity: number;
 }
 
+export interface CKReorderedKnowledgeEntry {
+  id: string;
+  type: "knowledge";
+  title: string;
+  desc: string;
+  operationRationale: string;
+  parentId: string | null;
+  sourceParentIds: string[];
+}
+
+export interface CKKnowledgeReorderPatch {
+  reorderedKnowledge: CKReorderedKnowledgeEntry[];
+  removedKnowledgeIds: string[];
+  redirectedIds: Record<string, string>;
+  rationale: string;
+}
+
 export interface CKOperationResult {
   generatedEntry?: CKGeneratedEntry;
   generatedEntries?: CKGeneratedEntry[];
   reorderedIds?: string[];
+  reorderPatch?: CKKnowledgeReorderPatch;
   validationDecision?: {
     conceptId: string;
     isValid: boolean;
@@ -100,6 +119,8 @@ const toBackendHistory = (history: CKEntryContext[]) =>
     title: entry.title,
     desc: entry.desc,
     operation_rationale: entry.operationRationale,
+    parent_id: entry.parentId,
+    source_parent_ids: entry.sourceParentIds || [],
   }));
 
 const readResponseError = async (response: Response) => {
@@ -445,13 +466,56 @@ const runRemoteOperation = async (
     }
 
     const payload = (await response.json()) as {
-      reordered_knowledge?: Array<{ id?: string }>;
+      reordered_knowledge?: Array<{
+        id?: string;
+        type?: string;
+        title?: string;
+        desc?: string;
+        operation_rationale?: string;
+        parent_id?: string | null;
+        source_parent_ids?: string[];
+      }>;
+      removed_knowledge_ids?: string[];
+      redirected_ids?: Record<string, string>;
+      rationale?: string;
     };
 
-    const reorderedIds =
-      payload.reordered_knowledge
-        ?.map((entry) => entry.id)
-        .filter((id): id is string => !!id) || [];
+    const reorderedKnowledge =
+      payload.reordered_knowledge?.reduce<CKReorderedKnowledgeEntry[]>(
+        (entries, entry) => {
+          if (
+            entry.type !== "knowledge" ||
+            typeof entry.id !== "string" ||
+            !entry.id.trim() ||
+            typeof entry.title !== "string" ||
+            typeof entry.desc !== "string"
+          ) {
+            return entries;
+          }
+
+          entries.push({
+            id: entry.id,
+            type: "knowledge",
+            title: entry.title,
+            desc: entry.desc,
+            operationRationale:
+              entry.operation_rationale ||
+              "Reordered based on K-space optimization.",
+            parentId:
+              typeof entry.parent_id === "string" && entry.parent_id.trim()
+                ? entry.parent_id
+                : null,
+            sourceParentIds:
+              entry.source_parent_ids?.filter(
+                (id): id is string => typeof id === "string" && !!id.trim(),
+              ) || [],
+          });
+          return entries;
+        },
+        [],
+      ) || [];
+
+    const reorderedIds = reorderedKnowledge.map((entry) => entry.id);
 
     if (!reorderedIds.length) {
       throw new Error("Invalid response payload from /nodes/reorder.");
@@ -459,6 +523,24 @@ const runRemoteOperation = async (
 
     return {
       reorderedIds,
+      reorderPatch: {
+        reorderedKnowledge,
+        removedKnowledgeIds:
+          payload.removed_knowledge_ids?.filter(
+            (id): id is string => typeof id === "string" && !!id.trim(),
+          ) || [],
+        redirectedIds: Object.fromEntries(
+          Object.entries(payload.redirected_ids || {}).filter(
+            ([sourceId, targetId]) =>
+              !!sourceId.trim() &&
+              typeof targetId === "string" &&
+              !!targetId.trim(),
+          ),
+        ),
+        rationale:
+          payload.rationale?.trim() ||
+          "Knowledge entries were reordered for a cleaner K-space structure.",
+      },
       dialogue: [],
     };
   }

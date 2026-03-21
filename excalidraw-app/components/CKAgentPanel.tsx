@@ -13,6 +13,7 @@ import type { ExcalidrawElementSkeleton } from "@excalidraw/element";
 import {
   runCKOperation,
   type CKEntryContext,
+  type CKKnowledgeReorderPatch,
   type CKNodeType,
   type CKOperation,
 } from "../services/ckAgent";
@@ -210,6 +211,7 @@ const toContextEntries = (nodes: CKCanvasNode[]): CKEntryContext[] =>
     desc: node.desc,
     operationRationale: node.operationRationale,
     parentId: node.parentId,
+    sourceParentIds: node.sourceParentIds,
   }));
 
 const reorderByIds = (
@@ -239,6 +241,26 @@ const reorderByIds = (
   return nodes.map((node) =>
     node.type === type ? sortedTargets[pointer++] : node,
   );
+};
+
+const layoutKnowledgeNodes = (knowledgeNodes: CKCanvasNode[]) =>
+  knowledgeNodes.map((node, index, allNodes) => ({
+    ...node,
+    y:
+      ROOT_Y -
+      ((allNodes.length - 1) * VERTICAL_GAP) / 2 +
+      index * VERTICAL_GAP,
+  }));
+
+const dedupeIds = (ids: string[]) => Array.from(new Set(ids.filter(Boolean)));
+
+const areStringArraysEqual = (left: string[], right: string[]) =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
+
+const parseNodeIndex = (nodeId: string, prefix: "C" | "K") => {
+  const match = nodeId.match(new RegExp(`^${prefix}(\\d+)$`, "i"));
+  return match ? Number.parseInt(match[1], 10) : null;
 };
 
 const parseExpandCount = (rawInput: string) => {
@@ -284,6 +306,8 @@ export const CKAgentPanel = ({
   const [latestDecision, setLatestDecision] = useState("");
   const [latestRationale, setLatestRationale] = useState("");
   const [busyOperation, setBusyOperation] = useState<CKOperation | null>(null);
+  const [pendingKnowledgeLayout, setPendingKnowledgeLayout] =
+    useState<CKKnowledgeReorderPatch | null>(null);
 
   const conceptCounterRef = useRef(0);
   const knowledgeCounterRef = useRef(-1);
@@ -291,9 +315,14 @@ export const CKAgentPanel = ({
   const sequenceRef = useRef(1);
   const childCounterRef = useRef<Record<string, number>>({});
   const nodesRef = useRef<CKCanvasNode[]>([]);
+  const lastInitialSeedRef = useRef<{
+    concept: string;
+    knowledge: string[];
+  } | null>(null);
   const novelConceptIdRef = useRef<string | null>(null);
   const novelMarkerElementIdRef = useRef<string | null>(null);
   const validationMarkerElementIdsRef = useRef<Record<string, string>>({});
+  const validationStatesRef = useRef<Record<string, boolean>>({});
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -302,6 +331,7 @@ export const CKAgentPanel = ({
   const canRunOperations =
     initialConcept.trim().length > 0 &&
     initialKnowledge.some((entry) => entry.trim().length > 0);
+  const hasPendingKnowledgeLayout = pendingKnowledgeLayout !== null;
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -413,6 +443,7 @@ export const CKAgentPanel = ({
         );
         excalidrawAPI.updateScene({ elements: updatedElements });
         delete validationMarkerElementIdsRef.current[conceptId];
+        delete validationStatesRef.current[conceptId];
       }
     }
 
@@ -422,6 +453,8 @@ export const CKAgentPanel = ({
         pruned.some((node) => node.id === prevSelected) ? prevSelected : null,
       );
       nodesRef.current = pruned;
+      syncNodeDerivedRefs(pruned);
+      setPendingKnowledgeLayout(null);
     }
 
     return pruned;
@@ -455,8 +488,10 @@ export const CKAgentPanel = ({
     if (!excalidrawAPI) {
       if (conceptId) {
         delete validationMarkerElementIdsRef.current[conceptId];
+        delete validationStatesRef.current[conceptId];
       } else {
         validationMarkerElementIdsRef.current = {};
+        validationStatesRef.current = {};
       }
       return;
     }
@@ -486,6 +521,7 @@ export const CKAgentPanel = ({
 
     for (const id of conceptIds) {
       delete validationMarkerElementIdsRef.current[id];
+      delete validationStatesRef.current[id];
     }
   }
 
@@ -545,6 +581,7 @@ export const CKAgentPanel = ({
       elements: [...updatedElements, ...marker],
     });
     validationMarkerElementIdsRef.current[conceptId] = markerId;
+    validationStatesRef.current[conceptId] = isValid;
   }
 
   function markNovelConceptOnCanvas(conceptId: string) {
@@ -646,6 +683,7 @@ export const CKAgentPanel = ({
         ids.add(validationMarkerId);
         delete validationMarkerElementIdsRef.current[node.id];
       }
+      delete validationStatesRef.current[node.id];
     }
 
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -744,7 +782,7 @@ export const CKAgentPanel = ({
       skeleton.push({
         id: node.elementId,
         type: "rectangle",
-        x: getColumnX(node.type),
+        x: node.x,
         y: node.y,
         width: node.width,
         height: node.height,
@@ -853,6 +891,272 @@ export const CKAgentPanel = ({
     }
   };
 
+  const syncNodeGeometryFromCanvas = (sourceNodes: CKCanvasNode[]) => {
+    if (!excalidrawAPI || !sourceNodes.length) {
+      return sourceNodes;
+    }
+
+    const liveElementById = new Map(
+      excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .filter((element) => !element.isDeleted)
+        .map((element) => [element.id, element]),
+    );
+
+    return sourceNodes.reduce<CKCanvasNode[]>((nextNodes, node) => {
+      const liveNodeElement = liveElementById.get(node.elementId);
+      if (!liveNodeElement) {
+        return nextNodes;
+      }
+
+      nextNodes.push({
+        ...node,
+        x: liveNodeElement.x,
+        y: liveNodeElement.y,
+        width: liveNodeElement.width,
+        height: liveNodeElement.height,
+      });
+      return nextNodes;
+    }, []);
+  };
+
+  const syncNodeDerivedRefs = (sourceNodes: CKCanvasNode[]) => {
+    let maxConceptIndex = 0;
+    let maxKnowledgeIndex = -1;
+    let maxSequence = 0;
+    const nextChildCounts: Record<string, number> = {};
+
+    for (const node of sourceNodes) {
+      if (node.type === "concept") {
+        const conceptIndex = parseNodeIndex(node.id, "C");
+        if (conceptIndex !== null) {
+          maxConceptIndex = Math.max(maxConceptIndex, conceptIndex);
+        }
+      }
+
+      if (node.type === "knowledge") {
+        const knowledgeIndex = parseNodeIndex(node.id, "K");
+        if (knowledgeIndex !== null) {
+          maxKnowledgeIndex = Math.max(maxKnowledgeIndex, knowledgeIndex);
+        }
+      }
+
+      maxSequence = Math.max(maxSequence, node.sequence);
+
+      const sourceParentIds = node.sourceParentIds.length
+        ? node.sourceParentIds
+        : node.parentId
+        ? [node.parentId]
+        : [];
+      const primaryParentId = sourceParentIds[0];
+      if (primaryParentId) {
+        nextChildCounts[primaryParentId] =
+          (nextChildCounts[primaryParentId] || 0) + 1;
+      }
+    }
+
+    conceptCounterRef.current = maxConceptIndex;
+    knowledgeCounterRef.current = maxKnowledgeIndex;
+    sequenceRef.current = maxSequence + 1;
+    childCounterRef.current = nextChildCounts;
+  };
+
+  const resolveRedirectId = (
+    sourceId: string | null,
+    redirectedIds: Record<string, string>,
+  ) => {
+    if (!sourceId) {
+      return null;
+    }
+
+    const seen = new Set<string>();
+    let currentId = sourceId;
+    while (redirectedIds[currentId] && !seen.has(currentId)) {
+      seen.add(currentId);
+      currentId = redirectedIds[currentId];
+    }
+    return currentId;
+  };
+
+  const previewKnowledgeReorder = (
+    sourceNodes: CKCanvasNode[],
+    patch: CKKnowledgeReorderPatch,
+  ) => {
+    const removedKnowledgeIds = new Set(patch.removedKnowledgeIds);
+    const redirectedIds = patch.redirectedIds;
+    const reorderedKnowledgeById = new Map(
+      patch.reorderedKnowledge.map((entry) => [entry.id, entry]),
+    );
+    const existingNodeById = new Map(
+      sourceNodes.map((node) => [node.id, node]),
+    );
+
+    const remapIds = (ids: string[]) =>
+      dedupeIds(
+        ids
+          .map((id) => resolveRedirectId(id, redirectedIds))
+          .filter((id): id is string => !!id),
+      );
+
+    const conceptNodes = sourceNodes
+      .filter((node) => node.type === "concept")
+      .map((node) => ({
+        ...node,
+        parentId: resolveRedirectId(node.parentId, redirectedIds),
+        sourceParentIds: remapIds(node.sourceParentIds),
+      }));
+
+    const previewKnowledgeNodes = patch.reorderedKnowledge.map((entry) => {
+      const existingNode = existingNodeById.get(entry.id);
+      const normalizedSourceParentIds =
+        entry.sourceParentIds.length > 0
+          ? remapIds(entry.sourceParentIds)
+          : entry.parentId
+          ? remapIds([entry.parentId])
+          : [];
+
+      if (existingNode) {
+        return {
+          ...existingNode,
+          title: entry.title,
+          desc: entry.desc,
+          operationRationale: entry.operationRationale,
+          parentId: resolveRedirectId(entry.parentId, redirectedIds),
+          sourceParentIds: normalizedSourceParentIds,
+          height: estimateNodeHeight(
+            "knowledge",
+            existingNode.id,
+            entry.title,
+            entry.desc,
+          ),
+        };
+      }
+
+      return {
+        id: entry.id,
+        type: "knowledge" as const,
+        title: entry.title,
+        desc: entry.desc,
+        operationRationale: entry.operationRationale,
+        parentId: resolveRedirectId(entry.parentId, redirectedIds),
+        x: KNOWLEDGE_COLUMN_X,
+        y: ROOT_Y,
+        width: NODE_WIDTH,
+        height: estimateNodeHeight(
+          "knowledge",
+          entry.id,
+          entry.title,
+          entry.desc,
+        ),
+        generated: false,
+        status: "accepted" as const,
+        elementId: nextElementId("node"),
+        arrowId: null,
+        extraArrowIds: [],
+        sourceParentIds: normalizedSourceParentIds,
+        sequence: sequenceRef.current++,
+      };
+    });
+
+    const unmatchedKnowledgeNodes = sourceNodes
+      .filter(
+        (node) =>
+          node.type === "knowledge" &&
+          !removedKnowledgeIds.has(node.id) &&
+          !reorderedKnowledgeById.has(node.id),
+      )
+      .map((node) => ({
+        ...node,
+        parentId: resolveRedirectId(node.parentId, redirectedIds),
+        sourceParentIds: remapIds(node.sourceParentIds),
+      }));
+
+    const conceptNodeById = new Map(
+      conceptNodes.map((node) => [node.id, node]),
+    );
+    const orderedKnowledgeNodes = layoutKnowledgeNodes([
+      ...previewKnowledgeNodes,
+      ...unmatchedKnowledgeNodes,
+    ]);
+    const pendingKnowledgeNodes = [...orderedKnowledgeNodes];
+    const nextNodes: CKCanvasNode[] = [];
+
+    for (const node of sourceNodes) {
+      if (node.type === "knowledge") {
+        const nextKnowledgeNode = pendingKnowledgeNodes.shift();
+        if (nextKnowledgeNode) {
+          nextNodes.push(nextKnowledgeNode);
+        }
+        continue;
+      }
+
+      nextNodes.push(conceptNodeById.get(node.id) || node);
+    }
+
+    return [...nextNodes, ...pendingKnowledgeNodes];
+  };
+
+  const rebuildCanvasBindings = (sourceNodes: CKCanvasNode[]) =>
+    sourceNodes.map((node) => {
+      const connectionIds = node.sourceParentIds.length
+        ? node.sourceParentIds
+        : node.parentId
+        ? [node.parentId]
+        : [];
+      const arrowIds = connectionIds.map(() => nextElementId("arrow"));
+
+      return {
+        ...node,
+        elementId: nextElementId("node"),
+        arrowId: arrowIds[0] || null,
+        extraArrowIds: arrowIds.slice(1),
+      };
+    });
+
+  const redrawAllNodesOnCanvas = (sourceNodes: CKCanvasNode[]) => {
+    if (!excalidrawAPI) {
+      return sourceNodes;
+    }
+
+    const previousNodes = nodesRef.current;
+    const nextNodes = rebuildCanvasBindings(sourceNodes);
+    const novelConceptId = novelConceptIdRef.current;
+    const validationStates = { ...validationStatesRef.current };
+    const nextSelectedNodeId =
+      nextNodes.find((node) => node.id === selectedNodeId)?.id || null;
+
+    if (previousNodes.length) {
+      deleteNodesFromCanvas(previousNodes, { removeDivider: true });
+    }
+
+    addNodesToCanvas(nextNodes, [], { shouldScroll: false });
+    nodesRef.current = nextNodes;
+    syncNodeDerivedRefs(nextNodes);
+    setNodes(nextNodes);
+
+    if (
+      novelConceptId &&
+      nextNodes.some((node) => node.id === novelConceptId)
+    ) {
+      markNovelConceptOnCanvas(novelConceptId);
+    }
+
+    validationStatesRef.current = {};
+    validationMarkerElementIdsRef.current = {};
+    for (const [conceptId, isValid] of Object.entries(validationStates)) {
+      if (
+        nextNodes.some(
+          (node) => node.id === conceptId && node.type === "concept",
+        )
+      ) {
+        markValidationOnCanvas(conceptId, isValid);
+      }
+    }
+
+    selectNodeOnCanvas(nextSelectedNodeId);
+    return nextNodes;
+  };
+
   const makeGeneratedNode = (
     type: CKNodeType,
     parent: CKCanvasNode,
@@ -908,7 +1212,6 @@ export const CKAgentPanel = ({
     }
 
     const prevNodes = nodesRef.current;
-    const prevInitialNodes = prevNodes.filter((node) => !node.generated);
     if (novelMarkerElementIdRef.current) {
       clearNovelMarkerFromCanvas();
     }
@@ -916,6 +1219,12 @@ export const CKAgentPanel = ({
     const knowledgeEntries = initialKnowledge
       .map((entry) => entry.trim())
       .filter(Boolean);
+    const sameSeed =
+      lastInitialSeedRef.current?.concept === concept &&
+      areStringArraysEqual(
+        lastInitialSeedRef.current?.knowledge || [],
+        knowledgeEntries,
+      );
 
     const shouldRenderRoot = concept.length > 0 || knowledgeEntries.length > 0;
     if (!shouldRenderRoot) {
@@ -928,11 +1237,25 @@ export const CKAgentPanel = ({
       setLatestDecision("");
       setLatestRationale("");
       clearValidationMarkerFromCanvas();
+      setPendingKnowledgeLayout(null);
+      lastInitialSeedRef.current = null;
       return;
     }
 
+    if (sameSeed && prevNodes.length) {
+      const liveNodes = syncNodeGeometryFromCanvas(prevNodes);
+      setNodes(liveNodes);
+      nodesRef.current = liveNodes;
+      syncNodeDerivedRefs(liveNodes);
+      return;
+    }
+
+    const prevInitialNodes = syncNodeGeometryFromCanvas(prevNodes).filter(
+      (node) => !node.generated,
+    );
+
     const positionById = new Map(
-      prevInitialNodes.map((node) => [node.id, { y: node.y }]),
+      prevInitialNodes.map((node) => [node.id, { x: node.x, y: node.y }]),
     );
 
     conceptCounterRef.current = 0;
@@ -947,7 +1270,7 @@ export const CKAgentPanel = ({
       desc: "Initial concept provided by user.",
       operationRationale: "User-defined starting concept.",
       parentId: null,
-      x: CONCEPT_COLUMN_X,
+      x: positionById.get("C0")?.x ?? CONCEPT_COLUMN_X,
       y: positionById.get("C0")?.y ?? ROOT_Y,
       width: NODE_WIDTH,
       height: estimateNodeHeight(
@@ -973,8 +1296,8 @@ export const CKAgentPanel = ({
         title: entry,
         desc: "Initial knowledge provided by user.",
         operationRationale: "User-defined initial knowledge.",
-        parentId: rootNode.id,
-        x: KNOWLEDGE_COLUMN_X,
+        parentId: null,
+        x: positionById.get(id)?.x ?? KNOWLEDGE_COLUMN_X,
         y:
           positionById.get(id)?.y ??
           ROOT_Y -
@@ -1000,12 +1323,11 @@ export const CKAgentPanel = ({
     childCounterRef.current[rootNode.id] = knowledgeNodes.length;
 
     const nextNodes = [rootNode, ...knowledgeNodes];
-    if (prevNodes.length) {
-      deleteNodesFromCanvas(prevNodes);
-    }
-    addNodesToCanvas(nextNodes, [], { shouldScroll: false });
-    setNodes(nextNodes);
-    nodesRef.current = nextNodes;
+    redrawAllNodesOnCanvas(nextNodes);
+    lastInitialSeedRef.current = {
+      concept,
+      knowledge: knowledgeEntries,
+    };
     selectNodeOnCanvas(
       nextNodes.some((node) => node.id === selectedNodeId)
         ? selectedNodeId
@@ -1013,6 +1335,7 @@ export const CKAgentPanel = ({
     );
     setLatestDecision("");
     setLatestRationale("");
+    setPendingKnowledgeLayout(null);
   };
 
   useEffect(() => {
@@ -1020,11 +1343,36 @@ export const CKAgentPanel = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialConcept, initialKnowledge, excalidrawAPI]);
 
+  const applyPendingKnowledgeLayout = () => {
+    if (!pendingKnowledgeLayout) {
+      toast("There is no pending knowledge layout to apply.");
+      return;
+    }
+
+    const nextNodes = previewKnowledgeReorder(
+      nodesRef.current,
+      pendingKnowledgeLayout,
+    );
+    redrawAllNodesOnCanvas(nextNodes);
+    setPendingKnowledgeLayout(null);
+    setLatestDecision("Applied reordered knowledge layout.");
+    setLatestRationale(pendingKnowledgeLayout.rationale);
+  };
+
   const runOperation = async (operation: CKOperation) => {
-    const currentNodes = pruneDeletedGeneratedNodes(nodesRef.current);
+    const currentNodes = syncNodeGeometryFromCanvas(
+      pruneDeletedGeneratedNodes(nodesRef.current),
+    );
 
     if (!canRunOperations || !currentNodes.length) {
       toast("Add initial concept and at least one knowledge entry.");
+      return;
+    }
+
+    if (hasPendingKnowledgeLayout) {
+      toast(
+        "Apply the pending knowledge layout before running another action.",
+      );
       return;
     }
 
@@ -1105,6 +1453,7 @@ export const CKAgentPanel = ({
           desc: focusNode.desc,
           operationRationale: focusNode.operationRationale,
           parentId: focusNode.parentId,
+          sourceParentIds: focusNode.sourceParentIds,
         },
         history: toContextEntries(currentNodes),
         expandCount,
@@ -1113,11 +1462,39 @@ export const CKAgentPanel = ({
       if (result.reorderedIds) {
         const targetType =
           operation === "ReorderConcept" ? "concept" : "knowledge";
-        setNodes((prev) =>
-          reorderByIds(prev, result.reorderedIds!, targetType),
-        );
-        setLatestDecision(`${operation} completed.`);
-        setLatestRationale("");
+        if (operation === "ReorderKnowledge" && result.reorderPatch) {
+          const previewNodes = previewKnowledgeReorder(
+            currentNodes,
+            result.reorderPatch,
+          );
+          const selectedIdStillPresent = previewNodes.some(
+            (node) => node.id === selectedNodeId,
+          );
+          const redirectTarget =
+            selectedNodeId && result.reorderPatch.redirectedIds[selectedNodeId]
+              ? result.reorderPatch.redirectedIds[selectedNodeId]
+              : null;
+          setNodes(previewNodes);
+          setPendingKnowledgeLayout(result.reorderPatch);
+          setLatestDecision(
+            "ReorderKnowledge prepared a new knowledge structure. Apply layout to redraw the canvas.",
+          );
+          setLatestRationale(result.reorderPatch.rationale);
+          setSelectedNodeId(
+            selectedIdStillPresent
+              ? selectedNodeId
+              : redirectTarget &&
+                previewNodes.some((node) => node.id === redirectTarget)
+              ? redirectTarget
+              : null,
+          );
+        } else {
+          setNodes((prev) =>
+            reorderByIds(prev, result.reorderedIds!, targetType),
+          );
+          setLatestDecision(`${operation} completed.`);
+          setLatestRationale("");
+        }
       }
 
       if (result.validationDecision) {
@@ -1196,8 +1573,6 @@ export const CKAgentPanel = ({
         });
 
         const nextNodes = [...currentNodes, ...generatedNodes];
-        setNodes(nextNodes);
-        nodesRef.current = nextNodes;
         const resultLabel =
           generatedNodes[0].type === "knowledge"
             ? "knowledge nodes"
@@ -1214,7 +1589,7 @@ export const CKAgentPanel = ({
                 .join("\n\n")
             : generatedNodes[0].operationRationale,
         );
-        addNodesToCanvas(generatedNodes, currentNodes);
+        redrawAllNodesOnCanvas(nextNodes);
         selectNodeOnCanvas(generatedNodes[generatedNodes.length - 1].id);
       }
     } catch (error) {
@@ -1292,6 +1667,7 @@ export const CKAgentPanel = ({
     const nextNodes = nodes.filter((node) => !idsToRemove.has(node.id));
     setNodes(nextNodes);
     nodesRef.current = nextNodes;
+    syncNodeDerivedRefs(nextNodes);
     selectNodeOnCanvas(selectedNode.parentId || null);
     setLatestDecision(`${selectedNode.id} rejected and removed.`);
     setLatestRationale("");
@@ -1370,6 +1746,12 @@ export const CKAgentPanel = ({
             ? `Selected ${selectedNode.type}: ${selectedNode.id}.`
             : "Select a single canvas node to enable type-specific actions."}
         </div>
+        {hasPendingKnowledgeLayout ? (
+          <div className="ck-hint-text">
+            A reordered knowledge layout is ready. Apply layout to sync the
+            canvas before running more actions.
+          </div>
+        ) : null}
         <div className="ck-actions-grid">
           {ACTIONS.map((operation) => (
             <button
@@ -1379,6 +1761,7 @@ export const CKAgentPanel = ({
               disabled={
                 !canRunOperations ||
                 busyOperation !== null ||
+                hasPendingKnowledgeLayout ||
                 (getRequiredFocusType(operation) !== null &&
                   selectedNode?.type !== getRequiredFocusType(operation))
               }
@@ -1406,8 +1789,16 @@ export const CKAgentPanel = ({
           <button
             type="button"
             className="ck-small-button"
+            onClick={applyPendingKnowledgeLayout}
+            disabled={!hasPendingKnowledgeLayout}
+          >
+            Apply layout
+          </button>
+          <button
+            type="button"
+            className="ck-small-button"
             onClick={acceptSelectedNode}
-            disabled={!selectedNode?.generated}
+            disabled={!selectedNode?.generated || hasPendingKnowledgeLayout}
           >
             Accept selected
           </button>
@@ -1415,7 +1806,7 @@ export const CKAgentPanel = ({
             type="button"
             className="ck-small-button"
             onClick={rejectSelectedNode}
-            disabled={!selectedNode?.generated}
+            disabled={!selectedNode?.generated || hasPendingKnowledgeLayout}
           >
             Reject selected
           </button>

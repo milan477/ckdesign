@@ -448,13 +448,37 @@ Rules:
         4. DISCONNECT: If a relationship between two K-entries no longer holds, remove the link.
 
         ### OUTPUT
-        Return a JSON object with a single key "knowledge_entries" containing a list of objects.
-        Each object must have:
-        - "id": The ID of the knowledge entry (keep existing if possible, or generate new K#).
-        - "type": "knowledge"
-        - "title": The title.
-        - "desc": The description.
-        - "reordering_rationale": Explanation of why it was moved, merged, or renamed.
+        Return valid JSON only in this exact shape:
+
+        {{
+          "knowledge_entries": [
+            {{
+              "id": "K1",
+              "type": "knowledge",
+              "title": "...",
+              "desc": "...",
+              "reordering_rationale": "...",
+              "parent_id": "C0",
+              "source_parent_ids": ["C0"]
+            }}
+          ],
+          "removed_knowledge_ids": ["K2"],
+          "redirected_ids": {{
+            "K2": "K1"
+          }},
+          "rationale": "2-4 sentence summary of the overall reordering logic"
+        }}
+
+        Requirements:
+        - "knowledge_entries" must contain every knowledge node that should remain after reordering, in the desired top-to-bottom order.
+        - Keep an existing knowledge ID whenever possible, especially for MERGE. Prefer choosing one surviving existing ID instead of inventing a new one.
+        - If a knowledge node is removed, include its ID in "removed_knowledge_ids".
+        - Every removed knowledge ID must appear in "redirected_ids" with the surviving concept or knowledge ID that dependent nodes should reconnect to.
+        - "parent_id" and "source_parent_ids" must use IDs that exist in the CK history or in the returned "knowledge_entries".
+        - Use "source_parent_ids" to preserve multiple incoming connections when needed. If there is only one incoming connection, include that single ID.
+        - If a relationship no longer holds, do not include it in "source_parent_ids".
+        - Do not return any knowledge ID in both "knowledge_entries" and "removed_knowledge_ids".
+        - Do not add markdown, comments, or text outside the JSON object.
 
         Example:
         {{
@@ -464,8 +488,15 @@ Rules:
                     "type": "knowledge",
                     "title": "...",
                     "desc": "...",
-                    "reordering_rationale": "Merged K1 and K2 because..."
+                    "reordering_rationale": "Merged K1 and K2 because...",
+                    "parent_id": "C0",
+                    "source_parent_ids": ["C0"]
                 }}
-            ]
+            ],
+            "removed_knowledge_ids": ["K2"],
+            "redirected_ids": {{
+                "K2": "K1"
+            }},
+            "rationale": "K1 and K2 were merged because they repeated the same evidence, while the remaining entries were nested to reduce duplication."
         }}
         """

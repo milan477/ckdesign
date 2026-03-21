@@ -85,8 +85,11 @@ async def reorder_knowledge(request: ReorderRequest):
     """Reorder knowledge entries based on the current history"""
     try:
         agent = CKAgent()
-        reordered_entries = await agent.reorder_knowledge_entries(request.topic, request.ck_history)
-        return {"reordered_knowledge": reordered_entries}
+        reorder_result = await agent.reorder_knowledge_entries(
+            request.topic,
+            request.ck_history,
+        )
+        return reorder_result
     except Exception as e:
         logger.error("Error in reorder_knowledge: %s", str(e))
         return {"error": str(e)}

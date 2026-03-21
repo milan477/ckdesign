@@ -18,6 +18,8 @@ class CKEntry(BaseModel):
     title: str
     desc: str
     operation_rationale: str
+    parent_id: Optional[str] = None
+    source_parent_ids: List[str] = Field(default_factory=list)
 
 
 class SimulationRequest(BaseModel):
@@ -36,8 +38,15 @@ class ReorderRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]
 
+class ReorderedKnowledgeEntry(CKEntry):
+    pass
+
+
 class ReorderResponse(BaseModel):
-    reordered_knowledge: List[CKEntry]
+    reordered_knowledge: List[ReorderedKnowledgeEntry]
+    removed_knowledge_ids: List[str] = Field(default_factory=list)
+    redirected_ids: dict[str, str] = Field(default_factory=dict)
+    rationale: str
 
 
 class CreateConceptRequest(BaseModel):

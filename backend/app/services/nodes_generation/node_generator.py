@@ -401,7 +401,7 @@ class CKAgent:
                 {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
                 {"role": "user", "content": prompt_reorder_knowledge_entries}
             ],
-            temperature=0.5,
+            temperature=0,
             response_format={"type": "json_object"}
         )
 
@@ -410,23 +410,97 @@ class CKAgent:
         try:
             data = json.loads(content)
             entries = data.get("knowledge_entries", [])
+            removed_knowledge_ids = [
+                str(entry_id).strip()
+                for entry_id in data.get("removed_knowledge_ids", [])
+                if str(entry_id).strip()
+            ]
+            redirected_ids_raw = data.get("redirected_ids", {})
+            redirected_ids = {
+                str(source_id).strip(): str(target_id).strip()
+                for source_id, target_id in redirected_ids_raw.items()
+                if str(source_id).strip() and str(target_id).strip()
+            }
+            rationale = str(data.get("rationale", "")).strip()
 
-            # Convert to list of dicts (compatible with CKEntry)
             result = []
             for e in entries:
-                result.append({
-                    "id": e.get("id"),
-                    "type": "knowledge",
-                    "title": e.get("title"),
-                    "desc": e.get("desc"),
-                    "operation_rationale": e.get("reordering_rationale", "Reordered based on K-Space optimization")
-                })
-            return result
+                entry_id = str(e.get("id", "")).strip()
+                parent_id = e.get("parent_id")
+                source_parent_ids = e.get("source_parent_ids", [])
+                normalized_source_parent_ids = [
+                    str(source_id).strip()
+                    for source_id in source_parent_ids
+                    if str(source_id).strip()
+                ]
 
-        except json.JSONDecodeError:
+                result.append({
+                    "id": entry_id,
+                    "type": "knowledge",
+                    "title": str(e.get("title", "")).strip(),
+                    "desc": str(e.get("desc", "")).strip(),
+                    "operation_rationale": str(
+                        e.get("reordering_rationale", "Reordered based on K-Space optimization")
+                    ).strip(),
+                    "parent_id": str(parent_id).strip() if parent_id is not None else None,
+                    "source_parent_ids": normalized_source_parent_ids,
+                })
+
+            if not result:
+                raise ValueError("Reorder response contained no knowledge entries.")
+
+            return {
+                "reordered_knowledge": result,
+                "removed_knowledge_ids": removed_knowledge_ids,
+                "redirected_ids": redirected_ids,
+                "rationale": rationale or "Reordered knowledge entries to improve K-space structure.",
+            }
+
+        except (json.JSONDecodeError, ValueError, AttributeError):
             print("Failed to parse reorder response")
-            # Fallback: return original knowledge entries
-            return [entry.dict() for entry in ck_history if entry.type == 'knowledge']
+            fallback_entries = []
+            for entry in ck_history:
+                entry_type = (
+                    entry.type
+                    if hasattr(entry, "type")
+                    else entry.get("type")
+                )
+                if str(entry_type).lower() != "knowledge":
+                    continue
+                entry_id = entry.id if hasattr(entry, "id") else entry.get("id")
+                title = entry.title if hasattr(entry, "title") else entry.get("title")
+                desc = entry.desc if hasattr(entry, "desc") else entry.get("desc")
+                operation_rationale = (
+                    entry.operation_rationale
+                    if hasattr(entry, "operation_rationale")
+                    else entry.get("operation_rationale")
+                )
+                parent_id = (
+                    entry.parent_id
+                    if hasattr(entry, "parent_id")
+                    else entry.get("parent_id")
+                )
+                source_parent_ids = (
+                    entry.source_parent_ids
+                    if hasattr(entry, "source_parent_ids")
+                    else entry.get("source_parent_ids", [])
+                )
+                fallback_entries.append({
+                    "id": entry_id,
+                    "type": "knowledge",
+                    "title": title,
+                    "desc": desc,
+                    "operation_rationale": operation_rationale or "Reordered based on K-Space optimization",
+                    "parent_id": parent_id,
+                    "source_parent_ids": source_parent_ids or [],
+                })
+
+            return {
+                "reordered_knowledge": fallback_entries,
+                "removed_knowledge_ids": [],
+                "redirected_ids": {},
+                "rationale": "Reorder parser fallback: preserved existing knowledge structure.",
+            }
 
     async def run_simulation(self, topic: str, initial_entry: dict, knowledge_entries: list, iterations: int = 2):
         """Run a single simulation with the given parameters"""

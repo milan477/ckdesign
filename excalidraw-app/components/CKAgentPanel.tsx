@@ -12,7 +12,6 @@ import type { ExcalidrawElementSkeleton } from "@excalidraw/element";
 
 import {
   runCKOperation,
-  type CKAgentMessage,
   type CKEntryContext,
   type CKNodeType,
   type CKOperation,
@@ -54,10 +53,6 @@ type CKCanvasNode = CKEntryContext & {
   extraArrowIds: string[];
   sourceParentIds: string[];
   sequence: number;
-};
-
-type TranscriptItem = CKAgentMessage & {
-  id: number;
 };
 
 const ACTIONS: readonly CKOperation[] = [
@@ -283,8 +278,8 @@ export const CKAgentPanel = ({
   const [initialKnowledge, setInitialKnowledge] = useState<string[]>([""]);
   const [nodes, setNodes] = useState<CKCanvasNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [latestDecision, setLatestDecision] = useState("");
+  const [latestRationale, setLatestRationale] = useState("");
   const [busyOperation, setBusyOperation] = useState<CKOperation | null>(null);
 
   const conceptCounterRef = useRef(0);
@@ -292,7 +287,6 @@ export const CKAgentPanel = ({
   const elementCounterRef = useRef(1);
   const sequenceRef = useRef(1);
   const childCounterRef = useRef<Record<string, number>>({});
-  const transcriptCounterRef = useRef(1);
   const nodesRef = useRef<CKCanvasNode[]>([]);
   const novelConceptIdRef = useRef<string | null>(null);
   const novelMarkerElementIdRef = useRef<string | null>(null);
@@ -365,20 +359,6 @@ export const CKAgentPanel = ({
 
     syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
   }, [excalidrawAPI, nodes]);
-
-  const pushTranscript = (messages: CKAgentMessage[]) => {
-    if (!messages.length) {
-      return;
-    }
-
-    setTranscript((prev) => [
-      ...prev,
-      ...messages.map((message) => ({
-        ...message,
-        id: transcriptCounterRef.current++,
-      })),
-    ]);
-  };
 
   const nextElementId = (prefix: string) =>
     `ck-${prefix}-${elementCounterRef.current++}`;
@@ -819,6 +799,7 @@ export const CKAgentPanel = ({
       nodesRef.current = [];
       selectNodeOnCanvas(null);
       setLatestDecision("");
+      setLatestRationale("");
       return;
     }
 
@@ -902,8 +883,8 @@ export const CKAgentPanel = ({
         ? selectedNodeId
         : null,
     );
-    setTranscript([]);
     setLatestDecision("");
+    setLatestRationale("");
   };
 
   useEffect(() => {
@@ -1001,8 +982,6 @@ export const CKAgentPanel = ({
         expandCount,
       });
 
-      pushTranscript(result.dialogue);
-
       if (result.reorderedIds) {
         const targetType =
           operation === "ReorderConcept" ? "concept" : "knowledge";
@@ -1010,6 +989,7 @@ export const CKAgentPanel = ({
           reorderByIds(prev, result.reorderedIds!, targetType),
         );
         setLatestDecision(`${operation} completed.`);
+        setLatestRationale("");
       }
 
       if (result.noveltyDecision) {
@@ -1023,8 +1003,9 @@ export const CKAgentPanel = ({
             )}, C ${result.noveltyDecision.scores.clarity.toFixed(1)})`
           : "";
         setLatestDecision(
-          `Best concept: ${result.noveltyDecision.selectedConceptId}${scoreText}. ${result.noveltyDecision.rationale}`,
+          `Best concept: ${result.noveltyDecision.selectedConceptId}${scoreText}.`,
         );
+        setLatestRationale(result.noveltyDecision.rationale);
         selectNodeOnCanvas(result.noveltyDecision.selectedConceptId);
         markNovelConceptOnCanvas(result.noveltyDecision.selectedConceptId);
       }
@@ -1082,6 +1063,13 @@ export const CKAgentPanel = ({
         setLatestDecision(
           generatedNodes.length > 1
             ? `${operation} generated ${generatedNodes.length} ${resultLabel}.`
+            : `${operation} generated ${generatedNodes[0].id}.`,
+        );
+        setLatestRationale(
+          generatedNodes.length > 1
+            ? generatedNodes
+                .map((node) => `${node.id}: ${node.operationRationale}`)
+                .join("\n\n")
             : generatedNodes[0].operationRationale,
         );
         addNodesToCanvas(generatedNodes, currentNodes);
@@ -1124,6 +1112,7 @@ export const CKAgentPanel = ({
     );
     excalidrawAPI.updateScene({ elements: nextElements });
     setLatestDecision(`${updated.id} accepted.`);
+    setLatestRationale(updated.operationRationale);
   };
 
   const rejectSelectedNode = () => {
@@ -1163,6 +1152,7 @@ export const CKAgentPanel = ({
     nodesRef.current = nextNodes;
     selectNodeOnCanvas(selectedNode.parentId || null);
     setLatestDecision(`${selectedNode.id} rejected and removed.`);
+    setLatestRationale("");
   };
 
   const addKnowledgeInput = () => {
@@ -1263,7 +1253,12 @@ export const CKAgentPanel = ({
       <div className="ck-agent-section">
         <div className="ck-agent-subtitle">Decision</div>
         <div className="ck-decision-box">
-          {latestDecision || "Run an operation to see agent decisions."}
+          <div className="ck-decision-summary">
+            {latestDecision || "Run an operation to see agent decisions."}
+          </div>
+          {latestRationale ? (
+            <div className="ck-decision-rationale">{latestRationale}</div>
+          ) : null}
         </div>
         <div className="ck-accept-reject-row">
           <button
@@ -1301,23 +1296,6 @@ export const CKAgentPanel = ({
               <span>{node.title}</span>
             </button>
           ))}
-        </div>
-      </div>
-
-      <div className="ck-agent-section">
-        <div className="ck-agent-subtitle">Agent dialogue</div>
-        <div className="ck-transcript">
-          {transcript.length === 0 ? (
-            <div className="ck-transcript-empty">
-              Concept and knowledge agent messages will appear here.
-            </div>
-          ) : (
-            transcript.map((message) => (
-              <div key={message.id} className="ck-transcript-line">
-                <strong>{message.speaker}</strong>: {message.content}
-              </div>
-            ))
-          )}
         </div>
       </div>
     </div>

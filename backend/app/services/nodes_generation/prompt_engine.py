@@ -177,22 +177,24 @@ CK history:
 Selected parent concept:
 {focus_concept}
 
-Return valid JSON only in this exact shape:
-{{
-  "concepts": [
-    {{
-      "title": "string",
-      "desc": "2-3 sentence concept description",
-      "operation_rationale": "2-3 sentence rationale for why this is a valid C-->C expansion"
-    }}
-  ]
-}}
+Return plain text only in this exact template:
+ITEM 1
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence concept description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid C-->C expansion>
+
+ITEM 2
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence concept description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid C-->C expansion>
 
 Rules:
 - Return exactly {target_count} concepts.
-- No markdown.
-- No trailing commas.
-- No text outside the JSON object.
+- Continue the ITEM pattern until ITEM {target_count}.
+- Keep every field on a single line.
+- Do not use JSON.
+- Do not use markdown.
+- Do not add any extra commentary before or after the template.
         """
 
     @staticmethod
@@ -264,9 +266,16 @@ CK history:
 Selected parent concept:
 {focus_concept}
 
-Return a direct answer that can be transformed into:
-- one knowledge title
-- one 2-3 sentence knowledge description
+Return plain text only in this exact template:
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence knowledge description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid C-->K move>
+
+Rules:
+- Keep every field on a single line.
+- Do not use JSON.
+- Do not use markdown.
+- Do not add any extra commentary before or after the template.
         """
 
     @staticmethod
@@ -295,9 +304,16 @@ CK history:
 Selected parent knowledge:
 {focus_knowledge}
 
-Return a direct answer that can be transformed into:
-- one concept title
-- one 2-3 sentence concept description
+Return plain text only in this exact template:
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence concept description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid K-->C move>
+
+Rules:
+- Keep every field on a single line.
+- Do not use JSON.
+- Do not use markdown.
+- Do not add any extra commentary before or after the template.
         """
 
     @staticmethod
@@ -327,22 +343,24 @@ CK history:
 Selected parent knowledge:
 {focus_knowledge}
 
-Return valid JSON only in this exact shape:
-{{
-  "knowledges": [
-    {{
-      "title": "string",
-      "desc": "2-3 sentence knowledge description",
-      "operation_rationale": "2-3 sentence rationale for why this is a valid K-->K expansion"
-    }}
-  ]
-}}
+Return plain text only in this exact template:
+ITEM 1
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence knowledge description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid K-->K expansion>
+
+ITEM 2
+TITLE: <single-line title>
+DESC: <single-line 2-3 sentence knowledge description>
+RATIONALE: <single-line 2-3 sentence rationale for why this is a valid K-->K expansion>
 
 Rules:
 - Return exactly {target_count} knowledge entries.
-- No markdown.
-- No trailing commas.
-- No text outside the JSON object.
+- Continue the ITEM pattern until ITEM {target_count}.
+- Keep every field on a single line.
+- Do not use JSON.
+- Do not use markdown.
+- Do not add any extra commentary before or after the template.
         """
 
     @staticmethod

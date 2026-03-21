@@ -96,7 +96,7 @@ async def create_concept(request: CreateConceptRequest):
     try:
         agent = CKAgent()
         history = [entry.model_dump() for entry in request.ck_history]
-        source_knowledge_id, title, desc = agent.k_to_c(
+        source_knowledge_id, title, desc, operation_rationale = agent.k_to_c(
             history,
             request.topic,
             focus_entry_id=request.focus_entry_id,
@@ -113,7 +113,7 @@ async def create_concept(request: CreateConceptRequest):
                 "type": "concept",
                 "title": title,
                 "desc": desc,
-                "operation_rationale": "Generated via single K->C (k_to_c) operation.",
+                "operation_rationale": operation_rationale,
             },
             "source_knowledge_ids": source_knowledge_ids,
         }
@@ -130,7 +130,7 @@ async def create_knowledge(request: CreateKnowledgeRequest):
     try:
         agent = CKAgent()
         history = [entry.model_dump() for entry in request.ck_history]
-        source_concept_id, title, desc = agent.create_knowledge(
+        source_concept_id, title, desc, operation_rationale = agent.create_knowledge(
             history,
             request.topic,
             focus_entry_id=request.focus_entry_id,
@@ -146,7 +146,7 @@ async def create_knowledge(request: CreateKnowledgeRequest):
                 "type": "knowledge",
                 "title": title,
                 "desc": desc,
-                "operation_rationale": "Generated via single C->K (CreateKnowledge) operation.",
+                "operation_rationale": operation_rationale,
             },
             "source_concept_id": source_concept_id,
         }

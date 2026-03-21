@@ -1,4 +1,5 @@
 import json
+import re
 
 from backend.app.services.ai.ai import OpenAIClient
 from backend.app.services.nodes_generation.prompt_engine import CKPromptEngine
@@ -6,6 +7,20 @@ from backend.app.services.nodes_generation.prompt_engine import CKPromptEngine
 
 class KnowledgeAgent:
     """Knowledge-side CK operations."""
+
+    _SINGLE_FIELD_PATTERN = re.compile(
+        r"^\s*TITLE:\s*(?P<title>.+?)\s*$"
+        r"(?:\r?\n)+\s*DESC:\s*(?P<desc>.+?)\s*$"
+        r"(?:\r?\n)+\s*RATIONALE:\s*(?P<rationale>.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    _ITEM_BLOCK_PATTERN = re.compile(
+        r"ITEM\s+(?P<index>\d+)\s*"
+        r"(?:\r?\n)+\s*TITLE:\s*(?P<title>[^\r\n]+)\s*"
+        r"(?:\r?\n)+\s*DESC:\s*(?P<desc>[^\r\n]+)\s*"
+        r"(?:\r?\n)+\s*RATIONALE:\s*(?P<rationale>[^\r\n]+)",
+        re.IGNORECASE,
+    )
 
     def __init__(self, llm_model: str = "gpt-4.1", ai_client: OpenAIClient = None):
         self.ai = ai_client or OpenAIClient(llm_model=llm_model)
@@ -27,6 +42,63 @@ class KnowledgeAgent:
             "desc": getattr(entry, "desc", ""),
             "operation_rationale": getattr(entry, "operation_rationale", ""),
         }
+
+    @staticmethod
+    def _normalize_field(value):
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    @classmethod
+    def _parse_single_entry(cls, content, fallback_rationale):
+        match = cls._SINGLE_FIELD_PATTERN.search(content or "")
+        if not match:
+            raise ValueError("Failed to parse single-entry model response.")
+
+        title = cls._normalize_field(match.group("title"))
+        desc = cls._normalize_field(match.group("desc"))
+        rationale = cls._normalize_field(match.group("rationale"))
+
+        if not title or not desc:
+            raise ValueError("Parsed single-entry response is missing title or desc.")
+
+        return {
+            "title": title,
+            "desc": desc,
+            "operation_rationale": rationale or fallback_rationale,
+        }
+
+    @classmethod
+    def _parse_item_entries(cls, content, desired_count, fallback_rationale):
+        matches = list(cls._ITEM_BLOCK_PATTERN.finditer(content or ""))
+        if len(matches) < desired_count:
+            raise ValueError(
+                f"Expected at least {desired_count} item blocks, but got {len(matches)}.",
+            )
+
+        entries = []
+        for expected_index, match in enumerate(matches[:desired_count], start=1):
+            item_index = int(match.group("index"))
+            if item_index != expected_index:
+                raise ValueError(
+                    f"Expected ITEM {expected_index}, but got ITEM {item_index}.",
+                )
+
+            title = cls._normalize_field(match.group("title"))
+            desc = cls._normalize_field(match.group("desc"))
+            rationale = cls._normalize_field(match.group("rationale"))
+            if not title or not desc:
+                raise ValueError(
+                    f"ITEM {expected_index} is missing title or desc.",
+                )
+
+            entries.append(
+                {
+                    "title": title,
+                    "desc": desc,
+                    "operation_rationale": rationale or fallback_rationale,
+                }
+            )
+
+        return entries
 
     def CreateKnowledge(self, ck_history, topic, focus_entry_id=None):
         history = [self._entry_to_dict(entry) for entry in ck_history]
@@ -55,44 +127,26 @@ class KnowledgeAgent:
             json.dumps(focus_concept, indent=2),
         )
 
-        title_prmpt = CKPromptEngine.TITLE_TRANSFORM
-        desc_prmpt = CKPromptEngine.DESC_TRANSFORM
-
         response = self.client.chat.completions.create(
             model=self.llm_model,
             messages=[
                 {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
                 {"role": "user", "content": prompt},
             ],
-            temperature=1,
-        )
-
-        response_title = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": response.choices[0].message.content},
-                {"role": "user", "content": title_prmpt},
-            ],
             temperature=0,
         )
 
-        response_desc = self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": response.choices[0].message.content},
-                {"role": "user", "content": desc_prmpt},
-            ],
-            temperature=0,
+        parsed = self._parse_single_entry(
+            response.choices[0].message.content,
+            "Generated via single C->K (CreateKnowledge) operation.",
         )
 
-        final_title = response_title.choices[0].message.content
-        final_desc = response_desc.choices[0].message.content
-
-        return focus_concept.get("id", ""), final_title, final_desc
+        return (
+            focus_concept.get("id", ""),
+            parsed["title"],
+            parsed["desc"],
+            parsed["operation_rationale"],
+        )
 
     def ExpandKnowledge(self, ck_history, topic, focus_entry_id=None, target_count=None):
         history = [self._entry_to_dict(entry) for entry in ck_history]
@@ -134,39 +188,14 @@ class KnowledgeAgent:
                 {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
                 {"role": "user", "content": prompt_expand_knowledge},
             ],
-            temperature=1,
-            response_format={"type": "json_object"},
+            temperature=0,
         )
 
-        payload = json.loads(response.choices[0].message.content or "{}")
-        raw_knowledges = payload.get("knowledges", [])
-        if not isinstance(raw_knowledges, list):
-            raise ValueError("ExpandKnowledge: invalid response, expected 'knowledges' array.")
-
-        knowledges = []
-        for entry in raw_knowledges:
-            if not isinstance(entry, dict):
-                continue
-            title = str(entry.get("title", "")).strip()
-            desc = str(entry.get("desc", "")).strip()
-            if not title or not desc:
-                continue
-            rationale = str(entry.get("operation_rationale", "")).strip()
-            knowledges.append(
-                {
-                    "title": title,
-                    "desc": desc,
-                    "operation_rationale": rationale
-                    or "Generated by ExpandKnowledge (K-->K) operation.",
-                }
-            )
-            if len(knowledges) == desired_count:
-                break
-
-        if len(knowledges) < desired_count:
-            raise ValueError(
-                f"ExpandKnowledge expected {desired_count} knowledge entries, but got fewer.",
-            )
+        knowledges = self._parse_item_entries(
+            response.choices[0].message.content,
+            desired_count,
+            "Generated by ExpandKnowledge (K-->K) operation.",
+        )
 
         return focus_knowledge.get("id", ""), knowledges
 

@@ -158,24 +158,17 @@
     font-size: 0.8rem;
     line-height: 1.35;
     background: var(--default-bg-color);
+    white-space: pre-wrap;
   }
 
-  .ck-transcript {
-    border: 1px dashed var(--default-border-color);
-    border-radius: 0.5rem;
-    padding: 0.45rem;
-    max-height: 12rem;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    background: var(--default-bg-color);
+  .ck-decision-summary {
+    font-weight: 600;
   }
 
-  .ck-transcript-line,
-  .ck-transcript-empty {
-    font-size: 0.78rem;
-    line-height: 1.35;
+  .ck-decision-rationale {
+    margin-top: 0.45rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--default-border-color);
   }
 
   .ck-hint-text {

@@ -61,6 +61,23 @@ export interface CKReorderedKnowledgeEntry {
   sourceParentIds: string[];
 }
 
+export interface CKReorderedConceptEntry {
+  id: string;
+  type: "concept";
+  title: string;
+  desc: string;
+  operationRationale: string;
+  parentId: string | null;
+  sourceParentIds: string[];
+}
+
+export interface CKConceptReorderPatch {
+  reorderedConcepts: CKReorderedConceptEntry[];
+  removedConceptIds: string[];
+  redirectedIds: Record<string, string>;
+  rationale: string;
+}
+
 export interface CKKnowledgeReorderPatch {
   reorderedKnowledge: CKReorderedKnowledgeEntry[];
   removedKnowledgeIds: string[];
@@ -72,6 +89,7 @@ export interface CKOperationResult {
   generatedEntry?: CKGeneratedEntry;
   generatedEntries?: CKGeneratedEntry[];
   reorderedIds?: string[];
+  conceptReorderPatch?: CKConceptReorderPatch;
   reorderPatch?: CKKnowledgeReorderPatch;
   validationDecision?: {
     conceptId: string;
@@ -540,6 +558,109 @@ const runRemoteOperation = async (
         rationale:
           payload.rationale?.trim() ||
           "Knowledge entries were reordered for a cleaner K-space structure.",
+      },
+      dialogue: [],
+    };
+  }
+
+  if (input.operation === "ReorderConcept") {
+    const response = await fetch(`${base}/nodes/reorder-concepts`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        topic: input.topic,
+        ck_history: toBackendHistory(input.history),
+      }),
+    });
+
+    if (!response.ok) {
+      if (isNotImplementedStatus(response.status)) {
+        throw getNotImplementedError(input.operation);
+      }
+      const message = await readResponseError(response);
+      throw new Error(
+        `Backend /nodes/reorder-concepts failed (${response.status}): ${message}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      reordered_concepts?: Array<{
+        id?: string;
+        type?: string;
+        title?: string;
+        desc?: string;
+        operation_rationale?: string;
+        parent_id?: string | null;
+        source_parent_ids?: string[];
+      }>;
+      removed_concept_ids?: string[];
+      redirected_ids?: Record<string, string>;
+      rationale?: string;
+    };
+
+    const reorderedConcepts =
+      payload.reordered_concepts?.reduce<CKReorderedConceptEntry[]>(
+        (entries, entry) => {
+          if (
+            entry.type !== "concept" ||
+            typeof entry.id !== "string" ||
+            !entry.id.trim() ||
+            typeof entry.title !== "string" ||
+            typeof entry.desc !== "string"
+          ) {
+            return entries;
+          }
+
+          entries.push({
+            id: entry.id,
+            type: "concept",
+            title: entry.title,
+            desc: entry.desc,
+            operationRationale:
+              entry.operation_rationale ||
+              "Reordered based on C-space optimization.",
+            parentId:
+              typeof entry.parent_id === "string" && entry.parent_id.trim()
+                ? entry.parent_id
+                : null,
+            sourceParentIds:
+              entry.source_parent_ids?.filter(
+                (id): id is string => typeof id === "string" && !!id.trim(),
+              ) || [],
+          });
+          return entries;
+        },
+        [],
+      ) || [];
+
+    const reorderedIds = reorderedConcepts.map((entry) => entry.id);
+
+    if (!reorderedIds.length) {
+      throw new Error("Invalid response payload from /nodes/reorder-concepts.");
+    }
+
+    return {
+      reorderedIds,
+      conceptReorderPatch: {
+        reorderedConcepts,
+        removedConceptIds:
+          payload.removed_concept_ids?.filter(
+            (id): id is string => typeof id === "string" && !!id.trim(),
+          ) || [],
+        redirectedIds: Object.fromEntries(
+          Object.entries(payload.redirected_ids || {}).filter(
+            ([sourceId, targetId]) =>
+              !!sourceId.trim() &&
+              typeof targetId === "string" &&
+              !!targetId.trim(),
+          ),
+        ),
+        rationale:
+          payload.rationale?.trim() ||
+          "Concept entries were reordered for a clearer C-space structure.",
       },
       dialogue: [],
     };

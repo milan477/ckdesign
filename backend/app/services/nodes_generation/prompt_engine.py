@@ -427,6 +427,82 @@ Rules:
 """
 
     @staticmethod
+    def reorder_concept_entries(topic: str, ck_history: str) -> str:
+        """Prompt to reorder concept entries based on their structural role in the topic."""
+        return f"""
+        ### ROLE
+        You are a C-K Theory Structural Expert. Your goal is to optimize the C-Space (Concepts)
+        for the topic: "{topic}".
+
+        ### CURRENT C-K MAP
+        {ck_history}
+
+        ### TASK: C -> C' (Reordering)
+        Review the existing concept entries. You must reorganize them into a clearer concept structure.
+        Apply the following rules:
+
+        1. REORDER: Place broad framing concepts earlier and more specific or synthesized concepts later.
+        2. MERGE: If C_a and C_b are duplicates or near-duplicates, combine them into one stronger concept.
+        3. RELINK: Reassign parent-child relationships when a concept is better explained by a different parent.
+        4. MULTI-SOURCE: Use multiple incoming links when a concept clearly synthesizes several concepts and/or knowledge entries.
+        5. REMOVE: If a concept is fully absorbed by another concept, remove it and redirect dependents.
+
+        ### OUTPUT
+        Return valid JSON only in this exact shape:
+
+        {{
+          "concept_entries": [
+            {{
+              "id": "C1",
+              "type": "concept",
+              "title": "...",
+              "desc": "...",
+              "reordering_rationale": "...",
+              "parent_id": "C0",
+              "source_parent_ids": ["C0", "K1"]
+            }}
+          ],
+          "removed_concept_ids": ["C2"],
+          "redirected_ids": {{
+            "C2": "C1"
+          }},
+          "rationale": "2-4 sentence summary of the overall reordering logic"
+        }}
+
+        Requirements:
+        - "concept_entries" must contain every concept node that should remain after reordering, in the desired top-to-bottom order.
+        - Keep an existing concept ID whenever possible, especially for MERGE. Prefer choosing one surviving existing ID instead of inventing a new one.
+        - If a concept node is removed, include its ID in "removed_concept_ids".
+        - Every removed concept ID should appear in "redirected_ids" with the surviving concept ID that dependent nodes should reconnect to.
+        - "parent_id" and "source_parent_ids" must use IDs that exist in the CK history or in the returned "concept_entries".
+        - "source_parent_ids" may include both concept IDs and knowledge IDs when a concept is supported by multiple upstream nodes.
+        - Use "source_parent_ids" to preserve multiple incoming connections when needed. If there is only one incoming connection, include that single ID.
+        - If a relationship no longer holds, do not include it in "source_parent_ids".
+        - Do not return any concept ID in both "concept_entries" and "removed_concept_ids".
+        - Do not add markdown, comments, or text outside the JSON object.
+
+        Example:
+        {{
+            "concept_entries": [
+                {{
+                    "id": "C1",
+                    "type": "concept",
+                    "title": "...",
+                    "desc": "...",
+                    "reordering_rationale": "Merged C1 and C2 because...",
+                    "parent_id": "C0",
+                    "source_parent_ids": ["C0", "K1"]
+                }}
+            ],
+            "removed_concept_ids": ["C2"],
+            "redirected_ids": {{
+                "C2": "C1"
+            }},
+            "rationale": "C1 and C2 were merged because they described the same design direction, while the remaining concepts were reordered from broad framing ideas to more specialized derivatives."
+        }}
+        """
+
+    @staticmethod
     def reorder_knowledge_entries(topic: str, ck_history: str) -> str:
         """Prompt to reorder knowledge entries based on their relevance to the topic"""
         return f"""

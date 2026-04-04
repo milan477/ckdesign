@@ -388,6 +388,125 @@ class CKAgent:
             # Keep only Knowledge-type entries
             return [entry for entry in ck_history if self._get_entry_type(entry) == CKType.KNOWLEDGE]
 
+    async def reorder_concept_entries(self, topic: str, ck_history: list):
+        """Reorder concept entries based on the topic and history."""
+        history_str = json.dumps(
+            [entry.dict() if hasattr(entry, 'dict') else entry for entry in ck_history],
+            indent=2,
+        )
+
+        prompt_reorder_concept_entries = CKPromptEngine.reorder_concept_entries(
+            topic,
+            history_str,
+        )
+
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
+                {"role": "user", "content": prompt_reorder_concept_entries}
+            ],
+            temperature=0,
+            response_format={"type": "json_object"}
+        )
+
+        content = response.choices[0].message.content
+
+        try:
+            data = json.loads(content)
+            entries = data.get("concept_entries", [])
+            removed_concept_ids = [
+                str(entry_id).strip()
+                for entry_id in data.get("removed_concept_ids", [])
+                if str(entry_id).strip()
+            ]
+            redirected_ids_raw = data.get("redirected_ids", {})
+            redirected_ids = {
+                str(source_id).strip(): str(target_id).strip()
+                for source_id, target_id in redirected_ids_raw.items()
+                if str(source_id).strip() and str(target_id).strip()
+            }
+            rationale = str(data.get("rationale", "")).strip()
+
+            result = []
+            for e in entries:
+                entry_id = str(e.get("id", "")).strip()
+                parent_id = e.get("parent_id")
+                source_parent_ids = e.get("source_parent_ids", [])
+                normalized_source_parent_ids = [
+                    str(source_id).strip()
+                    for source_id in source_parent_ids
+                    if str(source_id).strip()
+                ]
+
+                result.append({
+                    "id": entry_id,
+                    "type": "concept",
+                    "title": str(e.get("title", "")).strip(),
+                    "desc": str(e.get("desc", "")).strip(),
+                    "operation_rationale": str(
+                        e.get("reordering_rationale", "Reordered based on C-Space optimization")
+                    ).strip(),
+                    "parent_id": str(parent_id).strip() if parent_id is not None else None,
+                    "source_parent_ids": normalized_source_parent_ids,
+                })
+
+            if not result:
+                raise ValueError("Reorder response contained no concept entries.")
+
+            return {
+                "reordered_concepts": result,
+                "removed_concept_ids": removed_concept_ids,
+                "redirected_ids": redirected_ids,
+                "rationale": rationale or "Reordered concept entries to improve C-space structure.",
+            }
+
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            print("Failed to parse concept reorder response")
+            fallback_entries = []
+            for entry in ck_history:
+                entry_type = (
+                    entry.type
+                    if hasattr(entry, "type")
+                    else entry.get("type")
+                )
+                if str(entry_type).lower() != "concept":
+                    continue
+                entry_id = entry.id if hasattr(entry, "id") else entry.get("id")
+                title = entry.title if hasattr(entry, "title") else entry.get("title")
+                desc = entry.desc if hasattr(entry, "desc") else entry.get("desc")
+                operation_rationale = (
+                    entry.operation_rationale
+                    if hasattr(entry, "operation_rationale")
+                    else entry.get("operation_rationale")
+                )
+                parent_id = (
+                    entry.parent_id
+                    if hasattr(entry, "parent_id")
+                    else entry.get("parent_id")
+                )
+                source_parent_ids = (
+                    entry.source_parent_ids
+                    if hasattr(entry, "source_parent_ids")
+                    else entry.get("source_parent_ids", [])
+                )
+                fallback_entries.append({
+                    "id": entry_id,
+                    "type": "concept",
+                    "title": title,
+                    "desc": desc,
+                    "operation_rationale": operation_rationale or "Reordered based on C-Space optimization",
+                    "parent_id": parent_id,
+                    "source_parent_ids": source_parent_ids or [],
+                })
+
+            return {
+                "reordered_concepts": fallback_entries,
+                "removed_concept_ids": [],
+                "redirected_ids": {},
+                "rationale": "Reorder parser fallback: preserved existing concept structure.",
+            }
+
     async def reorder_knowledge_entries(self, topic: str, ck_history: list):
         """Reorder knowledge entries based on the topic and history"""
         # Convert ck_history to string for prompt

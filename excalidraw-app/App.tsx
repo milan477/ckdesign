@@ -1140,15 +1140,15 @@ const ExcalidrawWrapper = () => {
           <button
             type="button"
             className="ck-agent-overlay-drag-handle"
-            aria-label="Drag action panel"
+            aria-label="Drag panel"
             onPointerDown={handleCkOverlayPointerDown}
             onPointerMove={handleCkOverlayPointerMove}
             onPointerUp={handleCkOverlayPointerEnd}
             onPointerCancel={handleCkOverlayPointerEnd}
             onLostPointerCapture={endCkOverlayDrag}
+            title="Drag panel"
           >
-            <span>Action panel</span>
-            <span>Drag</span>
+            <span className="ck-agent-overlay-drag-grip" />
           </button>
           {excalidrawAPI && <CKAgentPanel excalidrawAPI={excalidrawAPI} />}
         </div>

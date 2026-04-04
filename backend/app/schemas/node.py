@@ -38,8 +38,20 @@ class ReorderRequest(BaseModel):
     topic: str
     ck_history: List[CKEntry]
 
+
+class ReorderedConceptEntry(CKEntry):
+    pass
+
+
 class ReorderedKnowledgeEntry(CKEntry):
     pass
+
+
+class ReorderConceptResponse(BaseModel):
+    reordered_concepts: List[ReorderedConceptEntry]
+    removed_concept_ids: List[str] = Field(default_factory=list)
+    redirected_ids: dict[str, str] = Field(default_factory=dict)
+    rationale: str
 
 
 class ReorderResponse(BaseModel):

@@ -14,6 +14,10 @@ from backend.app.schemas.node import (
     ExpandConceptResponse,
     ExpandKnowledgeRequest,
     ExpandKnowledgeResponse,
+    PlaceConceptRequest,
+    PlaceConceptResponse,
+    PlaceKnowledgeRequest,
+    PlaceKnowledgeResponse,
     ReorderConceptResponse,
     ValidateConceptRequest,
     ValidateConceptResponse,
@@ -295,6 +299,42 @@ async def decide_novel_concept(request: DecideNovelConceptRequest):
         return decision
     except Exception as e:
         logger.error("Error in decide_novel_concept: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/place-knowledge", response_model=PlaceKnowledgeResponse)
+async def place_knowledge(request: PlaceKnowledgeRequest):
+    """Determine which existing knowledge nodes a new entry connects to, if any."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        connected_ids, rationale = agent.place_knowledge(
+            history,
+            request.topic,
+            request.new_knowledge_title,
+            request.new_knowledge_desc,
+        )
+        return PlaceKnowledgeResponse(connected_to_ids=connected_ids, rationale=rationale)
+    except Exception as e:
+        logger.error("Error in place_knowledge: %s", str(e))
+        return {"error": str(e)}
+
+
+@router.post("/place-concept", response_model=PlaceConceptResponse)
+async def place_concept(request: PlaceConceptRequest):
+    """Determine which existing concept node should parent a new concept, if any."""
+    try:
+        agent = CKAgent()
+        history = [entry.model_dump() for entry in request.ck_history]
+        parent_id, rationale = agent.place_concept(
+            history,
+            request.topic,
+            request.new_concept_title,
+            request.new_concept_desc,
+        )
+        return PlaceConceptResponse(parent_id=parent_id, rationale=rationale)
+    except Exception as e:
+        logger.error("Error in place_concept: %s", str(e))
         return {"error": str(e)}
 
 

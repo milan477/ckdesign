@@ -12,6 +12,8 @@ import type { ExcalidrawElementSkeleton } from "@excalidraw/element";
 
 import {
   runCKOperation,
+  placeCKConcept,
+  placeCKKnowledge,
   type CKConceptReorderPatch,
   type CKEntryContext,
   type CKKnowledgeReorderPatch,
@@ -23,14 +25,27 @@ const NODE_WIDTH = 320;
 const NODE_HEIGHT = 160;
 const HORIZONTAL_GAP = 430;
 const VERTICAL_GAP = 220;
+const CONCEPT_TREE_LEVEL_GAP = 320;
+const CONCEPT_TREE_SIBLING_GAP = 520;
 const DIVIDER_X = 800;
 const CONCEPT_COLUMN_X = DIVIDER_X - HORIZONTAL_GAP / 2 - NODE_WIDTH / 2;
 const KNOWLEDGE_COLUMN_X = DIVIDER_X + HORIZONTAL_GAP / 2 - NODE_WIDTH / 2;
 const ROOT_Y = 240;
-const LABEL_FONT_SIZE = 14;
-const MAX_LABEL_LINE_CHARS = 32;
-const LABEL_LINE_HEIGHT_ESTIMATE = 23;
-const LABEL_VERTICAL_PADDING = 36;
+const TITLE_FONT_SIZE = 20;
+const DESC_FONT_SIZE = 13;
+const BADGE_FONT_SIZE = 11;
+const MAX_TITLE_LINE_CHARS = 24;
+const MAX_DESC_LINE_CHARS = 34;
+const NODE_TEXT_PADDING = 16;
+const TITLE_LINE_HEIGHT_ESTIMATE = 29;
+const DESC_LINE_HEIGHT_ESTIMATE = 19;
+const INTER_SECTION_GAP = 10;
+const BADGE_RIGHT_OFFSET = 38;
+const TITLE_COLOR_CONCEPT = "#e67700";
+const TITLE_COLOR_KNOWLEDGE = "#1864ab";
+const DESC_COLOR = "#868e96";
+const BADGE_COLOR_CONCEPT = "#f08c00";
+const BADGE_COLOR_KNOWLEDGE = "#4dabf7";
 const LEGACY_COLUMN_DIVIDER_ID = "ck-column-divider";
 const CONCEPT_COLUMN_BG_ID = "ck-concept-column-bg";
 const KNOWLEDGE_COLUMN_BG_ID = "ck-knowledge-column-bg";
@@ -43,6 +58,33 @@ const NOVEL_MARKER_OFFSET_Y = 90;
 const VALIDATION_MARKER_SIZE = 56;
 const VALIDATION_MARKER_OFFSET_X = 32;
 const VALIDATION_MARKER_OFFSET_Y = 18;
+const CTX_BUTTON_ID_PREFIX = "ck-ctx-btn";
+const CTX_BUTTON_WIDTH = 138;
+const CTX_BUTTON_HEIGHT = 28;
+const CTX_BUTTON_GAP = 6;
+const CTX_BUTTON_OFFSET_Y = 12;
+
+const CONCEPT_CTX_OPERATIONS: readonly CKOperation[] = [
+  "ExpandConcept",
+  "CreateKnowledge",
+  "ValidateConcept",
+  "DecideNovelConcept",
+];
+const KNOWLEDGE_CTX_OPERATIONS: readonly CKOperation[] = [
+  "ExpandKnowledge",
+  "CreateConcept",
+];
+
+const CTX_BUTTON_LABELS: Record<CKOperation, string> = {
+  ExpandConcept: "Refine concept",
+  CreateKnowledge: "Derive knowledge",
+  ValidateConcept: "Validate",
+  DecideNovelConcept: "Pick novel",
+  ExpandKnowledge: "Expand knowledge",
+  CreateConcept: "Derive concept",
+  ReorderConcept: "Restructure concepts",
+  ReorderKnowledge: "Restructure knowledge",
+};
 
 type NodeStatus = "pending" | "accepted";
 
@@ -60,37 +102,60 @@ type CKCanvasNode = CKEntryContext & {
   sequence: number;
 };
 
-const ACTIONS: readonly CKOperation[] = [
-  "CreateConcept",
-  "CreateKnowledge",
-  "ExpandConcept",
-  "ExpandKnowledge",
-  "ReorderConcept",
-  "ReorderKnowledge",
-  "ValidateConcept",
-  "DecideNovelConcept",
+const ACTION_GROUPS: readonly {
+  label: string;
+  operations: readonly CKOperation[];
+}[] = [
+  {
+    label: "Explore",
+    operations: [
+      "ExpandConcept",
+      "CreateKnowledge",
+      "ExpandKnowledge",
+      "CreateConcept",
+    ],
+  },
+  {
+    label: "Restructure",
+    operations: ["ReorderConcept", "ReorderKnowledge"],
+  },
+  {
+    label: "Evaluate",
+    operations: ["ValidateConcept", "DecideNovelConcept"],
+  },
 ];
 
+const OPERATION_THEME: Record<CKOperation, string> = {
+  CreateKnowledge: "c-to-k",
+  ExpandKnowledge: "k-to-k",
+  CreateConcept: "k-to-c",
+  ExpandConcept: "c-to-c",
+  ReorderConcept: "restructure-concept",
+  ReorderKnowledge: "restructure-knowledge",
+  ValidateConcept: "evaluate",
+  DecideNovelConcept: "evaluate",
+};
+
 const OPERATION_LABELS: Record<CKOperation, string> = {
-  CreateConcept: "Create a new concept from this knowledge",
-  ExpandConcept: "Expand this concept",
-  ExpandKnowledge: "Expand this knowledge",
-  ReorderConcept: "Reorganize the concept list",
+  CreateConcept: "Derive a new concept from knowledge",
+  ExpandConcept: "Refine concept",
+  CreateKnowledge: "Reason over concept",
+  ExpandKnowledge: "Reason over knowledge",
+  ReorderConcept: "Restructure the concept space",
   DecideNovelConcept: "Choose the most novel concept",
-  CreateKnowledge: "Create a new knowledge from this concept",
-  ReorderKnowledge: "Reorganize the knowledge list",
-  ValidateConcept: "Check whether this concept is supported",
+  ReorderKnowledge: "Restructure the knowledge space",
+  ValidateConcept: "Check whether this concept is valid",
 };
 
 const OPERATION_DESCRIPTIONS: Record<CKOperation, string> = {
-  CreateConcept: "Synthesize the selected knowledge into a stronger concept.",
-  ExpandConcept: "Generate adjacent concept directions worth exploring next.",
-  ExpandKnowledge: "Add more detailed supporting knowledge to this branch.",
-  ReorderConcept: "Restructure concepts into a clearer sequence or grouping.",
-  DecideNovelConcept: "Score concepts and highlight the strongest novel option.",
-  CreateKnowledge: "Turn the selected concept into concrete supporting knowledge.",
+  ExpandConcept: "Push the selected concept into new directions worth exploring.",
+  CreateKnowledge: "Derive concrete knowledge from the selected concept.",
+  ExpandKnowledge: "Deepen the selected knowledge or derive new insights.",
+  CreateConcept: "Use the selected knowledge to create a new concept.",
+  ReorderConcept: "Merge, split, or relink concepts into a clearer structure.",
   ReorderKnowledge: "Merge, nest, or redefine knowledge into a cleaner map.",
-  ValidateConcept: "Check whether current knowledges actually support the concept.",
+  ValidateConcept: "Check whether the selected concept is supported by knowledge.",
+  DecideNovelConcept: "Score all concepts and surface the most novel one.",
 };
 
 const formatNodeTypeLabel = (type: CKNodeType) =>
@@ -185,36 +250,30 @@ const getLabelFields = (title: string, desc: string) => {
   return { cleanTitle, cleanDesc };
 };
 
-const buildLabelText = (
-  type: CKNodeType,
-  id: string,
-  title: string,
-  desc: string,
-) => {
-  const { cleanTitle, cleanDesc } = getLabelFields(title, desc);
-  const wrappedTitle = wrapText(cleanTitle, MAX_LABEL_LINE_CHARS)
-    .split("\n")
-    .map((line, idx) => (idx === 0 ? `Title: ${line}` : line))
-    .join("\n");
-  const wrappedDesc = wrapText(cleanDesc, MAX_LABEL_LINE_CHARS)
-    .split("\n")
-    .map((line, idx) => (idx === 0 ? `Description: ${line}` : line))
-    .join("\n");
-  return `${type.toUpperCase()} ${id}\n\n${wrappedTitle}\n\n${wrappedDesc}`;
+const buildTitleText = (title: string) => {
+  const { cleanTitle } = getLabelFields(title, "");
+  return wrapText(cleanTitle, MAX_TITLE_LINE_CHARS);
 };
 
-const toLabelText = (node: CKCanvasNode) =>
-  buildLabelText(node.type, node.id, node.title, node.desc);
+const buildDescText = (title: string, desc: string) => {
+  const { cleanDesc } = getLabelFields(title, desc);
+  return wrapText(cleanDesc, MAX_DESC_LINE_CHARS);
+};
 
 const estimateNodeHeight = (
-  type: CKNodeType,
-  id: string,
+  _type: CKNodeType,
+  _id: string,
   title: string,
   desc: string,
 ) => {
-  const lines = buildLabelText(type, id, title, desc).split("\n").length;
+  const titleLines = buildTitleText(title).split("\n").length;
+  const descLines = buildDescText(title, desc).split("\n").length;
   const estimatedHeight =
-    lines * LABEL_LINE_HEIGHT_ESTIMATE + LABEL_VERTICAL_PADDING;
+    NODE_TEXT_PADDING +
+    titleLines * TITLE_LINE_HEIGHT_ESTIMATE +
+    INTER_SECTION_GAP +
+    descLines * DESC_LINE_HEIGHT_ESTIMATE +
+    NODE_TEXT_PADDING;
   return Math.max(NODE_HEIGHT, estimatedHeight);
 };
 
@@ -238,17 +297,178 @@ const layoutColumnNodes = (columnNodes: CKCanvasNode[]) =>
       index * VERTICAL_GAP,
   }));
 
-const layoutConceptNodes = (conceptNodes: CKCanvasNode[]) =>
-  layoutColumnNodes(conceptNodes);
+const layoutConceptNodes = (conceptNodes: CKCanvasNode[]) => {
+  if (!conceptNodes.length) {
+    return conceptNodes;
+  }
+
+  const conceptById = new Map(conceptNodes.map((node) => [node.id, node]));
+  const childrenByParentId = new Map<string, CKCanvasNode[]>();
+  const roots: CKCanvasNode[] = [];
+
+  const getConceptParentId = (node: CKCanvasNode) => {
+    const candidateIds = node.sourceParentIds.length
+      ? node.sourceParentIds
+      : node.parentId
+      ? [node.parentId]
+      : [];
+
+    const conceptParentId = candidateIds.find(
+      (candidateId) => candidateId !== node.id && conceptById.has(candidateId),
+    );
+    return conceptParentId || null;
+  };
+
+  for (const node of conceptNodes) {
+    const parentId = getConceptParentId(node);
+    if (!parentId) {
+      roots.push(node);
+      continue;
+    }
+
+    const siblings = childrenByParentId.get(parentId) || [];
+    siblings.push(node);
+    childrenByParentId.set(parentId, siblings);
+  }
+
+  for (const siblings of childrenByParentId.values()) {
+    siblings.sort((left, right) => left.sequence - right.sequence);
+  }
+
+  roots.sort((left, right) => left.sequence - right.sequence);
+
+  const levels: CKCanvasNode[][] = [];
+  const visited = new Set<string>();
+  const queue: Array<{ node: CKCanvasNode; level: number }> = roots.map((node) => ({
+    node,
+    level: 0,
+  }));
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || visited.has(current.node.id)) {
+      continue;
+    }
+
+    visited.add(current.node.id);
+    if (!levels[current.level]) {
+      levels[current.level] = [];
+    }
+    levels[current.level].push(current.node);
+
+    const children = childrenByParentId.get(current.node.id) || [];
+    for (const child of children) {
+      if (!visited.has(child.id)) {
+        queue.push({ node: child, level: current.level + 1 });
+      }
+    }
+  }
+
+  // Keep disconnected/cyclic nodes visible by placing them as extra roots.
+  for (const node of conceptNodes) {
+    if (visited.has(node.id)) {
+      continue;
+    }
+    if (!levels[0]) {
+      levels[0] = [];
+    }
+    levels[0].push(node);
+  }
+
+  const positionedById = new Map<string, CKCanvasNode>();
+  for (let levelIndex = 0; levelIndex < levels.length; levelIndex++) {
+    const levelNodes = levels[levelIndex] || [];
+    if (!levelNodes.length) {
+      continue;
+    }
+
+    levelNodes.sort((left, right) => left.sequence - right.sequence);
+    const startX =
+      CONCEPT_COLUMN_X -
+      ((levelNodes.length - 1) * CONCEPT_TREE_SIBLING_GAP) / 2;
+    for (let columnIndex = 0; columnIndex < levelNodes.length; columnIndex++) {
+      const node = levelNodes[columnIndex];
+      positionedById.set(node.id, {
+        ...node,
+        x: startX + columnIndex * CONCEPT_TREE_SIBLING_GAP,
+        y: ROOT_Y + levelIndex * CONCEPT_TREE_LEVEL_GAP,
+      });
+    }
+  }
+
+  return conceptNodes.map((node) => positionedById.get(node.id) || node);
+};
 
 const layoutKnowledgeNodes = (knowledgeNodes: CKCanvasNode[]) =>
   layoutColumnNodes(knowledgeNodes);
 
 const dedupeIds = (ids: string[]) => Array.from(new Set(ids.filter(Boolean)));
 
-const areStringArraysEqual = (left: string[], right: string[]) =>
-  left.length === right.length &&
-  left.every((value, index) => value === right[index]);
+const getShortestArrowEndpoints = (
+  sourceBounds: { x: number; y: number; width: number; height: number },
+  targetBounds: { x: number; y: number; width: number; height: number },
+) => {
+  const sourceAnchors = [
+    { x: sourceBounds.x + sourceBounds.width / 2, y: sourceBounds.y },
+    {
+      x: sourceBounds.x + sourceBounds.width,
+      y: sourceBounds.y + sourceBounds.height / 2,
+    },
+    {
+      x: sourceBounds.x + sourceBounds.width / 2,
+      y: sourceBounds.y + sourceBounds.height,
+    },
+    { x: sourceBounds.x, y: sourceBounds.y + sourceBounds.height / 2 },
+  ];
+
+  const targetAnchors = [
+    { x: targetBounds.x + targetBounds.width / 2, y: targetBounds.y },
+    {
+      x: targetBounds.x + targetBounds.width,
+      y: targetBounds.y + targetBounds.height / 2,
+    },
+    {
+      x: targetBounds.x + targetBounds.width / 2,
+      y: targetBounds.y + targetBounds.height,
+    },
+    { x: targetBounds.x, y: targetBounds.y + targetBounds.height / 2 },
+  ];
+
+  let bestStart = sourceAnchors[0];
+  let bestEnd = targetAnchors[0];
+  let shortestDistanceSquared = Number.POSITIVE_INFINITY;
+
+  for (const start of sourceAnchors) {
+    for (const end of targetAnchors) {
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const distanceSquared = dx * dx + dy * dy;
+      if (distanceSquared < shortestDistanceSquared) {
+        shortestDistanceSquared = distanceSquared;
+        bestStart = start;
+        bestEnd = end;
+      }
+    }
+  }
+
+  return { start: bestStart, end: bestEnd };
+};
+
+const isLineOfThoughtConnection = (
+  parentType: CKNodeType,
+  childType: CKNodeType,
+) => parentType !== childType;
+
+const getConnectionStyle = (isLineOfThought: boolean) =>
+  isLineOfThought
+    ? {
+        strokeColor: "#adb5bd",
+        strokeWidth: 1,
+      }
+    : {
+        strokeColor: "#212529",
+        strokeWidth: 3,
+      };
 
 const parseNodeIndex = (nodeId: string, prefix: "C" | "K") => {
   const match = nodeId.match(new RegExp(`^${prefix}(\\d+)$`, "i"));
@@ -286,13 +506,34 @@ const hasContainerId = (
 ): element is ExcalidrawElement & { containerId: string } =>
   "containerId" in element && typeof element.containerId === "string";
 
+const NODE_ELEMENT_ID_PATTERN = /^ck-node-\d+$/;
+
+const hasText = (
+  element: ExcalidrawElement | undefined,
+): element is ExcalidrawElement & { text: string } =>
+  !!element && "text" in element && typeof element.text === "string";
+
+const hasArrowBinding = (
+  binding: unknown,
+): binding is { id: string } =>
+  !!binding && typeof binding === "object" && "id" in binding;
+
 export const CKAgentPanel = ({
   excalidrawAPI,
 }: {
   excalidrawAPI: ExcalidrawImperativeAPI | null;
 }) => {
-  const [initialConcept, setInitialConcept] = useState("");
-  const [initialKnowledge, setInitialKnowledge] = useState<string[]>([""]);
+  const [initialConceptTitle, setInitialConceptTitle] = useState("");
+  const [initialConceptRequirements, setInitialConceptRequirements] =
+    useState("");
+  const [confirmedInitialConcept, setConfirmedInitialConcept] = useState<{
+    title: string;
+    requirements: string;
+  } | null>(null);
+  const [newKnowledgeTitle, setNewKnowledgeTitle] = useState("");
+  const [newKnowledgeDesc, setNewKnowledgeDesc] = useState("");
+  const [newConceptTitle, setNewConceptTitle] = useState("");
+  const [newConceptDesc, setNewConceptDesc] = useState("");
   const [nodes, setNodes] = useState<CKCanvasNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [latestDecision, setLatestDecision] = useState("");
@@ -302,25 +543,39 @@ export const CKAgentPanel = ({
     useState<CKConceptReorderPatch | null>(null);
   const [pendingKnowledgeLayout, setPendingKnowledgeLayout] =
     useState<CKKnowledgeReorderPatch | null>(null);
+  const [placingKnowledge, setPlacingKnowledge] = useState(false);
+  const [placingConcept, setPlacingConcept] = useState(false);
+  const [showLineOfThoughtArrows, setShowLineOfThoughtArrows] =
+    useState(true);
+  const [showNodeDescriptions, setShowNodeDescriptions] = useState(true);
 
   const conceptCounterRef = useRef(0);
   const knowledgeCounterRef = useRef(-1);
   const elementCounterRef = useRef(1);
   const sequenceRef = useRef(1);
   const childCounterRef = useRef<Record<string, number>>({});
+  const hasHydratedFromCanvasRef = useRef(false);
   const nodesRef = useRef<CKCanvasNode[]>([]);
   const pendingConceptLayoutBaseNodesRef = useRef<CKCanvasNode[] | null>(null);
   const pendingKnowledgeLayoutBaseNodesRef = useRef<CKCanvasNode[] | null>(
     null,
   );
   const lastInitialSeedRef = useRef<{
-    concept: string;
-    knowledge: string[];
+    title: string;
+    requirements: string;
   } | null>(null);
   const novelConceptIdRef = useRef<string | null>(null);
   const novelMarkerElementIdRef = useRef<string | null>(null);
   const validationMarkerElementIdsRef = useRef<Record<string, string>>({});
   const validationStatesRef = useRef<Record<string, boolean>>({});
+  const contextButtonParentIdRef = useRef<string | null>(null);
+  const isUpdatingContextButtonsRef = useRef(false);
+  const lastContextButtonPosRef = useRef<{
+    nodeId: string;
+    x: number;
+    y: number;
+    height: number;
+  } | null>(null);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
@@ -338,9 +593,20 @@ export const CKAgentPanel = ({
     () => nodes.filter((node) => node.generated).length,
     [nodes],
   );
-  const canRunOperations =
-    initialConcept.trim().length > 0 &&
-    initialKnowledge.some((entry) => entry.trim().length > 0);
+  const canRunOperations = confirmedInitialConcept !== null;
+  const topicForAgents = useMemo(() => {
+    if (!confirmedInitialConcept) {
+      return "";
+    }
+
+    const title = confirmedInitialConcept.title.trim();
+    const requirements = confirmedInitialConcept.requirements.trim();
+    if (!requirements) {
+      return title;
+    }
+
+    return `${title}\nRequirements: ${requirements}`;
+  }, [confirmedInitialConcept]);
   const hasPendingConceptLayout = pendingConceptLayout !== null;
   const hasPendingKnowledgeLayout = pendingKnowledgeLayout !== null;
   const hasPendingLayout = hasPendingConceptLayout || hasPendingKnowledgeLayout;
@@ -356,13 +622,332 @@ export const CKAgentPanel = ({
     setPendingKnowledgeLayout(null);
   };
 
+  const clearContextButtons = () => {
+    contextButtonParentIdRef.current = null;
+    lastContextButtonPosRef.current = null;
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    const hasAny = currentElements.some(
+      (el) => !el.isDeleted && el.id.startsWith(CTX_BUTTON_ID_PREFIX),
+    );
+    if (!hasAny) {
+      return;
+    }
+
+    excalidrawAPI.updateScene({
+      elements: currentElements.map((el) =>
+        el.id.startsWith(CTX_BUTTON_ID_PREFIX)
+          ? newElementWith(el, { isDeleted: true })
+          : el,
+      ),
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  };
+
+  const renderContextButtons = (
+    node: CKCanvasNode,
+    liveX?: number,
+    liveY?: number,
+    liveWidth?: number,
+    liveHeight?: number,
+  ) => {
+    if (!excalidrawAPI || isUpdatingContextButtonsRef.current) {
+      return;
+    }
+
+    isUpdatingContextButtonsRef.current = true;
+
+    const operations =
+      node.type === "concept" ? CONCEPT_CTX_OPERATIONS : KNOWLEDGE_CTX_OPERATIONS;
+
+    const nodeX = liveX ?? node.x;
+    const nodeY = liveY ?? node.y;
+    const nodeW = liveWidth ?? node.width;
+    const nodeH = liveHeight ?? node.height;
+
+    const totalWidth =
+      operations.length * CTX_BUTTON_WIDTH + (operations.length - 1) * CTX_BUTTON_GAP;
+    const startX = nodeX + nodeW / 2 - totalWidth / 2;
+    const startY = nodeY + nodeH + CTX_BUTTON_OFFSET_Y;
+    const skeleton: ExcalidrawElementSkeleton[] = [];
+    operations.forEach((op, i) => {
+      const btnX = startX + i * (CTX_BUTTON_WIDTH + CTX_BUTTON_GAP);
+      const btnId = `${CTX_BUTTON_ID_PREFIX}-${op}`;
+      const labelId = `${btnId}-label`;
+      skeleton.push({
+        id: btnId,
+        type: "rectangle",
+        x: btnX,
+        y: startY,
+        width: CTX_BUTTON_WIDTH,
+        height: CTX_BUTTON_HEIGHT,
+        backgroundColor: "#f8f9fa",
+        strokeColor: "#adb5bd",
+        strokeWidth: 1,
+        opacity: 60,
+        roundness: { type: 3 },
+      });
+      skeleton.push({
+        id: labelId,
+        type: "text",
+        x: btnX + 8,
+        y: startY + 6,
+        text: CTX_BUTTON_LABELS[op],
+        fontSize: 13,
+        fontFamily: FONT_FAMILY["Liberation Sans"],
+        strokeColor: "#495057",
+        opacity: 75,
+      } as ExcalidrawElementSkeleton);
+    });
+
+    const generated = convertToExcalidrawElements(skeleton, { regenerateIds: false });
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    // Remove old buttons then add new ones
+    const withoutOld = currentElements.map((el) =>
+      el.id.startsWith(CTX_BUTTON_ID_PREFIX)
+        ? newElementWith(el, { isDeleted: true })
+        : el,
+    );
+    excalidrawAPI.updateScene({
+      elements: [...withoutOld, ...generated],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+
+    contextButtonParentIdRef.current = node.id;
+    lastContextButtonPosRef.current = { nodeId: node.id, x: nodeX, y: nodeY, height: nodeH };
+    isUpdatingContextButtonsRef.current = false;
+  };
+
+  const handleCanvasSelectionChange = (
+    selectedElementIds: Readonly<Record<string, true>> | undefined,
+  ) => {
+    const selectedIds = new Set(Object.keys(selectedElementIds || {}));
+
+    // Check if any context button or its label was clicked.
+    const validContextOps = [
+      ...CONCEPT_CTX_OPERATIONS,
+      ...KNOWLEDGE_CTX_OPERATIONS,
+    ] as CKOperation[];
+    const clickedContextOp = [...selectedIds].reduce<CKOperation | null>(
+      (foundOp, selectedId) => {
+        if (foundOp) {
+          return foundOp;
+        }
+        if (!selectedId.startsWith(CTX_BUTTON_ID_PREFIX)) {
+          return null;
+        }
+
+        const baseButtonId = selectedId.endsWith("-label")
+          ? selectedId.slice(0, -"-label".length)
+          : selectedId;
+        const opId = baseButtonId.replace(`${CTX_BUTTON_ID_PREFIX}-`, "");
+        return validContextOps.includes(opId as CKOperation)
+          ? (opId as CKOperation)
+          : null;
+      },
+      null,
+    );
+
+    if (clickedContextOp) {
+      const parentId = contextButtonParentIdRef.current ?? selectedNodeId;
+      // Clear before async operation so position re-render doesn't conflict
+      contextButtonParentIdRef.current = null;
+      lastContextButtonPosRef.current = null;
+      if (parentId) {
+        selectNodeOnCanvas(parentId);
+        void runOperation(clickedContextOp, parentId);
+      }
+      return;
+    }
+
+    syncSelectedNodeFromCanvas(selectedElementIds);
+  };
+
+  const hydrateStateFromCanvas = () => {
+    if (!excalidrawAPI) {
+      return false;
+    }
+
+    const liveElements = excalidrawAPI
+      .getSceneElementsIncludingDeleted()
+      .filter((element) => !element.isDeleted);
+    const elementById = new Map(liveElements.map((element) => [element.id, element]));
+    const nodeRectangles = liveElements.filter(
+      (element) =>
+        element.type === "rectangle" && NODE_ELEMENT_ID_PATTERN.test(element.id),
+    );
+
+    if (!nodeRectangles.length) {
+      return false;
+    }
+
+    const nodeIdByElementId = new Map<string, string>();
+    const nodeTypeById = new Map<string, CKNodeType>();
+
+    for (const rectangle of nodeRectangles) {
+      const badgeElement = elementById.get(`${rectangle.id}-badge`);
+      const badgeText = hasText(badgeElement) ? badgeElement.text.trim() : "";
+      if (!/^[CK]\d+$/i.test(badgeText)) {
+        continue;
+      }
+
+      const normalizedNodeId = badgeText.toUpperCase();
+      nodeIdByElementId.set(rectangle.id, normalizedNodeId);
+      nodeTypeById.set(
+        normalizedNodeId,
+        normalizedNodeId.startsWith("C") ? "concept" : "knowledge",
+      );
+    }
+
+    if (!nodeIdByElementId.size) {
+      return false;
+    }
+
+    const sourceParentIdsByNodeId = new Map<string, string[]>();
+    const arrowIdsByNodeId = new Map<string, string[]>();
+    for (const element of liveElements) {
+      if (element.type !== "arrow") {
+        continue;
+      }
+
+      const startCandidate = (element as unknown as { start?: unknown }).start;
+      const endCandidate = (element as unknown as { end?: unknown }).end;
+      const startBinding = hasArrowBinding(startCandidate)
+        ? startCandidate
+        : null;
+      const endBinding = hasArrowBinding(endCandidate) ? endCandidate : null;
+      if (!startBinding || !endBinding) {
+        continue;
+      }
+
+      const parentNodeId = nodeIdByElementId.get(startBinding.id);
+      const childNodeId = nodeIdByElementId.get(endBinding.id);
+      if (!parentNodeId || !childNodeId) {
+        continue;
+      }
+
+      const nextParents = sourceParentIdsByNodeId.get(childNodeId) || [];
+      nextParents.push(parentNodeId);
+      sourceParentIdsByNodeId.set(childNodeId, nextParents);
+
+      const nextArrowIds = arrowIdsByNodeId.get(childNodeId) || [];
+      nextArrowIds.push(element.id);
+      arrowIdsByNodeId.set(childNodeId, nextArrowIds);
+    }
+
+    const recoveredNodes = nodeRectangles
+      .map((rectangle) => {
+        const recoveredNodeId = nodeIdByElementId.get(rectangle.id);
+        if (!recoveredNodeId) {
+          return null;
+        }
+
+        const recoveredType = nodeTypeById.get(recoveredNodeId);
+        if (!recoveredType) {
+          return null;
+        }
+
+        const titleElement = elementById.get(`${rectangle.id}-title`);
+        const descElement = elementById.get(`${rectangle.id}-desc`);
+        const recoveredTitle = hasText(titleElement)
+          ? titleElement.text.trim()
+          : recoveredNodeId;
+        const recoveredDesc = hasText(descElement)
+          ? descElement.text.trim()
+          : "Recovered from canvas.";
+        const recoveredSourceParentIds = dedupeIds(
+          sourceParentIdsByNodeId.get(recoveredNodeId) || [],
+        );
+        const recoveredArrowIds = arrowIdsByNodeId.get(recoveredNodeId) || [];
+
+        return {
+          id: recoveredNodeId,
+          type: recoveredType,
+          title: recoveredTitle,
+          desc: recoveredDesc,
+          operationRationale:
+            recoveredNodeId === "C0"
+              ? "User-defined starting concept."
+              : "Recovered from canvas.",
+          parentId: recoveredSourceParentIds[0] || null,
+          sourceParentIds: recoveredSourceParentIds,
+          x: rectangle.x,
+          y: rectangle.y,
+          width: rectangle.width,
+          height: rectangle.height,
+          generated: false,
+          status: "accepted" as const,
+          elementId: rectangle.id,
+          arrowId: recoveredArrowIds[0] || null,
+          extraArrowIds: recoveredArrowIds.slice(1),
+          sequence: 0,
+        } as CKCanvasNode;
+      })
+      .filter((node): node is CKCanvasNode => !!node)
+      .sort((left, right) => left.y - right.y || left.x - right.x)
+      .map((node, index) => ({
+        ...node,
+        sequence: index + 1,
+      }));
+
+    if (!recoveredNodes.length) {
+      return false;
+    }
+
+    const rootNode = recoveredNodes.find(
+      (node) => node.id === "C0" && node.type === "concept",
+    );
+    if (rootNode) {
+      const rootRequirements = rootNode.desc || "";
+      setInitialConceptTitle(rootNode.title);
+      setInitialConceptRequirements(rootRequirements);
+      setConfirmedInitialConcept({
+        title: rootNode.title,
+        requirements: rootRequirements,
+      });
+      lastInitialSeedRef.current = {
+        title: rootNode.title,
+        requirements: rootRequirements,
+      };
+    }
+
+    setNodes(recoveredNodes);
+    nodesRef.current = recoveredNodes;
+    syncNodeDerivedRefs(recoveredNodes);
+    clearPendingLayouts();
+    syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
+
+    return true;
+  };
+
+  const tryHydrateFromCanvas = () => {
+    if (!excalidrawAPI || hasHydratedFromCanvasRef.current) {
+      return false;
+    }
+
+    const hydrated = hydrateStateFromCanvas();
+    if (hydrated) {
+      hasHydratedFromCanvasRef.current = true;
+    }
+    return hydrated;
+  };
+
   const syncSelectedNodeFromCanvas = (
     selectedElementIds: Readonly<Record<string, true>> | undefined,
   ) => {
     const selectedIds = new Set(Object.keys(selectedElementIds || {}));
-    const matchedNodes = nodesRef.current.filter((node) =>
-      selectedIds.has(node.elementId),
-    );
+    const matchedNodes = nodesRef.current.filter((node) => {
+      const nodeElementIds = [
+        node.elementId,
+        `${node.elementId}-title`,
+        `${node.elementId}-desc`,
+        `${node.elementId}-badge`,
+      ];
+      return nodeElementIds.some((elementId) => selectedIds.has(elementId));
+    });
 
     if (matchedNodes.length === 1) {
       setSelectedNodeId(matchedNodes[0].id);
@@ -386,7 +971,12 @@ export const CKAgentPanel = ({
     excalidrawAPI.updateScene({
       appState: {
         selectedElementIds: nextSelectedNode
-          ? { [nextSelectedNode.elementId]: true }
+          ? {
+              [nextSelectedNode.elementId]: true,
+              [`${nextSelectedNode.elementId}-title`]: true,
+              [`${nextSelectedNode.elementId}-desc`]: true,
+              [`${nextSelectedNode.elementId}-badge`]: true,
+            }
           : {},
       },
       captureUpdate: CaptureUpdateAction.NEVER,
@@ -398,11 +988,39 @@ export const CKAgentPanel = ({
       return;
     }
 
-    syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
+    tryHydrateFromCanvas();
+    handleCanvasSelectionChange(excalidrawAPI.getAppState().selectedElementIds);
 
-    return excalidrawAPI.onChange((_elements, appState) => {
-      syncSelectedNodeFromCanvas(appState.selectedElementIds);
+    return excalidrawAPI.onChange((elements, appState) => {
+      if (!hasHydratedFromCanvasRef.current && nodesRef.current.length === 0) {
+        tryHydrateFromCanvas();
+      }
+      handleCanvasSelectionChange(appState.selectedElementIds);
+
+      // Re-render context buttons when the selected node is dragged
+      const parentId = contextButtonParentIdRef.current;
+      if (parentId && !isUpdatingContextButtonsRef.current) {
+        const parentNode = nodesRef.current.find((n) => n.id === parentId);
+        if (parentNode) {
+          const el = elements.find(
+            (e) => e.id === parentNode.elementId && !e.isDeleted,
+          );
+          if (el) {
+            const last = lastContextButtonPosRef.current;
+            if (
+              !last ||
+              last.nodeId !== parentId ||
+              Math.abs(el.x - last.x) > 0.5 ||
+              Math.abs(el.y - last.y) > 0.5 ||
+              Math.abs(el.height - last.height) > 0.5
+            ) {
+              renderContextButtons(parentNode, el.x, el.y, el.width, el.height);
+            }
+          }
+        }
+      }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [excalidrawAPI]);
 
   useEffect(() => {
@@ -410,8 +1028,34 @@ export const CKAgentPanel = ({
       return;
     }
 
-    syncSelectedNodeFromCanvas(excalidrawAPI.getAppState().selectedElementIds);
+    handleCanvasSelectionChange(excalidrawAPI.getAppState().selectedElementIds);
   }, [excalidrawAPI, nodes]);
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    const selectedNode = selectedNodeId
+      ? nodesRef.current.find((node) => node.id === selectedNodeId) || null
+      : null;
+    if (!selectedNode) {
+      clearContextButtons();
+      return;
+    }
+
+    renderContextButtons(selectedNode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId, nodes, excalidrawAPI]);
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+
+    tryHydrateFromCanvas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excalidrawAPI]);
 
   const nextElementId = (prefix: string) =>
     `ck-${prefix}-${elementCounterRef.current++}`;
@@ -441,9 +1085,79 @@ export const CKAgentPanel = ({
     const pruned = sourceNodes.filter(
       (node) => !node.generated || aliveElementIds.has(node.elementId),
     );
+    const prunedNodeIds = new Set(pruned.map((node) => node.id));
+    const removedNodes = sourceNodes.filter((node) => !prunedNodeIds.has(node.id));
+    const removedNodeIdSet = new Set(removedNodes.map((node) => node.id));
+    const removedElementIdSet = new Set(removedNodes.map((node) => node.elementId));
+
+    const sanitizedNodes = pruned.map((node) => {
+      const sourceParentIds = node.sourceParentIds.length
+        ? node.sourceParentIds
+        : node.parentId
+        ? [node.parentId]
+        : [];
+      const arrowIds = [
+        ...(node.arrowId ? [node.arrowId] : []),
+        ...node.extraArrowIds,
+      ];
+
+      const keptPairs = sourceParentIds.reduce<
+        Array<{ parentId: string; arrowId: string | null }>
+      >((accumulator, parentId, index) => {
+        if (removedNodeIdSet.has(parentId)) {
+          return accumulator;
+        }
+        accumulator.push({
+          parentId,
+          arrowId: arrowIds[index] || null,
+        });
+        return accumulator;
+      }, []);
+
+      const nextSourceParentIds = dedupeIds(
+        keptPairs.map((pair) => pair.parentId),
+      );
+      const nextArrowIds = keptPairs
+        .map((pair) => pair.arrowId)
+        .filter((arrowId): arrowId is string => !!arrowId);
+
+      return {
+        ...node,
+        parentId: nextSourceParentIds[0] || null,
+        sourceParentIds: nextSourceParentIds,
+        arrowId: nextArrowIds[0] || null,
+        extraArrowIds: nextArrowIds.slice(1),
+      };
+    });
+
+    if (removedElementIdSet.size) {
+      const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+      const updatedElements = currentElements.map((element) => {
+        if (element.isDeleted || element.type !== "arrow") {
+          return element;
+        }
+
+        const startCandidate = (element as unknown as { start?: unknown }).start;
+        const endCandidate = (element as unknown as { end?: unknown }).end;
+        const startBinding = hasArrowBinding(startCandidate)
+          ? startCandidate
+          : null;
+        const endBinding = hasArrowBinding(endCandidate) ? endCandidate : null;
+
+        if (
+          (startBinding && removedElementIdSet.has(startBinding.id)) ||
+          (endBinding && removedElementIdSet.has(endBinding.id))
+        ) {
+          return newElementWith(element, { isDeleted: true });
+        }
+
+        return element;
+      });
+      excalidrawAPI.updateScene({ elements: updatedElements });
+    }
     if (
       novelConceptIdRef.current &&
-      !pruned.some((node) => node.id === novelConceptIdRef.current)
+      !sanitizedNodes.some((node) => node.id === novelConceptIdRef.current)
     ) {
       clearNovelMarkerFromCanvas();
     }
@@ -451,7 +1165,9 @@ export const CKAgentPanel = ({
       validationMarkerElementIdsRef.current,
     )) {
       if (
-        !pruned.some((node) => node.id === conceptId && node.type === "concept")
+        !sanitizedNodes.some(
+          (node) => node.id === conceptId && node.type === "concept",
+        )
       ) {
         const currentElements =
           excalidrawAPI.getSceneElementsIncludingDeleted();
@@ -466,17 +1182,19 @@ export const CKAgentPanel = ({
       }
     }
 
-    if (pruned.length !== sourceNodes.length) {
-      setNodes(pruned);
+    if (sanitizedNodes.length !== sourceNodes.length) {
+      setNodes(sanitizedNodes);
       setSelectedNodeId((prevSelected) =>
-        pruned.some((node) => node.id === prevSelected) ? prevSelected : null,
+        sanitizedNodes.some((node) => node.id === prevSelected)
+          ? prevSelected
+          : null,
       );
-      nodesRef.current = pruned;
-      syncNodeDerivedRefs(pruned);
+      nodesRef.current = sanitizedNodes;
+      syncNodeDerivedRefs(sanitizedNodes);
       clearPendingLayouts();
     }
 
-    return pruned;
+    return sanitizedNodes;
   };
 
   const toast = (message: string) => {
@@ -677,6 +1395,9 @@ export const CKAgentPanel = ({
     }
     for (const node of nodesToDelete) {
       ids.add(node.elementId);
+      ids.add(`${node.elementId}-title`);
+      ids.add(`${node.elementId}-desc`);
+      ids.add(`${node.elementId}-badge`);
       if (node.arrowId) {
         ids.add(node.arrowId);
       }
@@ -797,7 +1518,17 @@ export const CKAgentPanel = ({
         node.id,
         node.generated,
       );
-      const labelText = toLabelText(node);
+      const groupId = `${node.elementId}-g`;
+      const textWidth = node.width - 2 * NODE_TEXT_PADDING;
+      const titleText = buildTitleText(node.title);
+      const descText = buildDescText(node.title, node.desc);
+      const titleLines = titleText.split("\n").length;
+      const titleBlockHeight =
+        titleLines * TITLE_LINE_HEIGHT_ESTIMATE + INTER_SECTION_GAP;
+      const titleColor =
+        node.type === "concept" ? TITLE_COLOR_CONCEPT : TITLE_COLOR_KNOWLEDGE;
+      const badgeColor =
+        node.type === "concept" ? BADGE_COLOR_CONCEPT : BADGE_COLOR_KNOWLEDGE;
       skeleton.push({
         id: node.elementId,
         type: "rectangle",
@@ -807,12 +1538,47 @@ export const CKAgentPanel = ({
         height: node.height,
         backgroundColor: colors.backgroundColor,
         strokeColor: colors.strokeColor,
-        label: {
-          text: labelText,
-          fontSize: LABEL_FONT_SIZE,
-          fontFamily: FONT_FAMILY.Nunito,
-        },
+        groupIds: [groupId],
       });
+      skeleton.push({
+        id: `${node.elementId}-title`,
+        type: "text",
+        x: node.x + NODE_TEXT_PADDING,
+        y: node.y + NODE_TEXT_PADDING,
+        width: textWidth,
+        text: titleText,
+        fontSize: TITLE_FONT_SIZE,
+        fontFamily: FONT_FAMILY["Liberation Sans"],
+        strokeColor: titleColor,
+        autoResize: false,
+        groupIds: [groupId],
+      } as ExcalidrawElementSkeleton);
+      if (showNodeDescriptions) {
+        skeleton.push({
+          id: `${node.elementId}-desc`,
+          type: "text",
+          x: node.x + NODE_TEXT_PADDING,
+          y: node.y + NODE_TEXT_PADDING + titleBlockHeight,
+          width: textWidth,
+          text: descText,
+          fontSize: DESC_FONT_SIZE,
+          fontFamily: FONT_FAMILY["Liberation Sans"],
+          strokeColor: DESC_COLOR,
+          autoResize: false,
+          groupIds: [groupId],
+        } as ExcalidrawElementSkeleton);
+      }
+      skeleton.push({
+        id: `${node.elementId}-badge`,
+        type: "text",
+        x: node.x + node.width - NODE_TEXT_PADDING - BADGE_RIGHT_OFFSET,
+        y: node.y + NODE_TEXT_PADDING,
+        text: node.id,
+        fontSize: BADGE_FONT_SIZE,
+        fontFamily: FONT_FAMILY["Liberation Sans"],
+        strokeColor: badgeColor,
+        groupIds: [groupId],
+      } as ExcalidrawElementSkeleton);
 
       const sourceParentIds = node.sourceParentIds.length
         ? node.sourceParentIds
@@ -835,19 +1601,22 @@ export const CKAgentPanel = ({
         if (!parent) {
           continue;
         }
+        const isLineOfThought = isLineOfThoughtConnection(
+          parent.type,
+          node.type,
+        );
+        if (isLineOfThought && !showLineOfThoughtArrows) {
+          continue;
+        }
+
+        const connectionStyle = getConnectionStyle(isLineOfThought);
         const parentBounds = getLiveBounds(parent);
         const nodeBounds = getLiveBounds(node);
-        const parentCenterX = parentBounds.x + parentBounds.width / 2;
-        const nodeCenterX = nodeBounds.x + nodeBounds.width / 2;
-        const leftToRight = parentCenterX <= nodeCenterX;
-        const startX = leftToRight
-          ? parentBounds.x + parentBounds.width
-          : parentBounds.x;
-        const startY = parentBounds.y + parentBounds.height / 2;
-        const endX = leftToRight
-          ? nodeBounds.x
-          : nodeBounds.x + nodeBounds.width;
-        const endY = nodeBounds.y + nodeBounds.height / 2;
+        const endpoints = getShortestArrowEndpoints(parentBounds, nodeBounds);
+        const startX = endpoints.start.x;
+        const startY = endpoints.start.y;
+        const endX = endpoints.end.x;
+        const endY = endpoints.end.y;
         skeleton.push({
           id: arrowId,
           type: "arrow",
@@ -855,7 +1624,8 @@ export const CKAgentPanel = ({
           y: startY,
           width: endX - startX,
           height: endY - startY,
-          strokeColor: "#495057",
+          strokeColor: connectionStyle.strokeColor,
+          strokeWidth: connectionStyle.strokeWidth,
           start: {
             id: parent.elementId,
           },
@@ -1254,6 +2024,8 @@ export const CKAgentPanel = ({
       return sourceNodes;
     }
 
+    clearContextButtons();
+
     const previousNodes = options?.previousNodesOverride || nodesRef.current;
     const nextNodes = rebuildCanvasBindings(sourceNodes);
     const novelConceptId = novelConceptIdRef.current;
@@ -1351,18 +2123,12 @@ export const CKAgentPanel = ({
     if (novelMarkerElementIdRef.current) {
       clearNovelMarkerFromCanvas();
     }
-    const concept = initialConcept.trim();
-    const knowledgeEntries = initialKnowledge
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const concept = confirmedInitialConcept;
     const sameSeed =
-      lastInitialSeedRef.current?.concept === concept &&
-      areStringArraysEqual(
-        lastInitialSeedRef.current?.knowledge || [],
-        knowledgeEntries,
-      );
+      lastInitialSeedRef.current?.title === concept?.title &&
+      lastInitialSeedRef.current?.requirements === concept?.requirements;
 
-    const shouldRenderRoot = concept.length > 0 || knowledgeEntries.length > 0;
+    const shouldRenderRoot = !!concept;
     if (!shouldRenderRoot) {
       if (prevNodes.length) {
         deleteNodesFromCanvas(prevNodes, { removeDivider: true });
@@ -1395,15 +2161,19 @@ export const CKAgentPanel = ({
     );
 
     conceptCounterRef.current = 0;
-    knowledgeCounterRef.current = Math.max(-1, knowledgeEntries.length - 1);
+    knowledgeCounterRef.current = -1;
     childCounterRef.current = {};
     sequenceRef.current = 1;
+
+    const rootTitle = concept?.title || "(initial concept)";
+    const rootRequirements =
+      concept?.requirements || "No explicit requirements provided.";
 
     const rootNode: CKCanvasNode = {
       id: "C0",
       type: "concept",
-      title: concept || "(initial concept)",
-      desc: "Initial concept provided by user.",
+      title: rootTitle,
+      desc: rootRequirements,
       operationRationale: "User-defined starting concept.",
       parentId: null,
       x: positionById.get("C0")?.x ?? CONCEPT_COLUMN_X,
@@ -1412,8 +2182,8 @@ export const CKAgentPanel = ({
       height: estimateNodeHeight(
         "concept",
         "C0",
-        concept || "(initial concept)",
-        "Initial concept provided by user.",
+        rootTitle,
+        rootRequirements,
       ),
       generated: false,
       status: "accepted",
@@ -1424,45 +2194,11 @@ export const CKAgentPanel = ({
       sequence: sequenceRef.current++,
     };
 
-    const knowledgeNodes = knowledgeEntries.map((entry, index) => {
-      const id = `K${index}`;
-      return {
-        id,
-        type: "knowledge" as const,
-        title: entry,
-        desc: "Initial knowledge provided by user.",
-        operationRationale: "User-defined initial knowledge.",
-        parentId: null,
-        x: positionById.get(id)?.x ?? KNOWLEDGE_COLUMN_X,
-        y:
-          positionById.get(id)?.y ??
-          ROOT_Y -
-            ((knowledgeEntries.length - 1) * VERTICAL_GAP) / 2 +
-            index * VERTICAL_GAP,
-        width: NODE_WIDTH,
-        height: estimateNodeHeight(
-          "knowledge",
-          id,
-          entry,
-          "Initial knowledge provided by user.",
-        ),
-        generated: false,
-        status: "accepted" as const,
-        elementId: nextElementId("node"),
-        arrowId: null,
-        extraArrowIds: [],
-        sourceParentIds: [],
-        sequence: sequenceRef.current++,
-      };
-    });
-
-    childCounterRef.current[rootNode.id] = knowledgeNodes.length;
-
-    const nextNodes = [rootNode, ...knowledgeNodes];
+    const nextNodes = [rootNode];
     redrawAllNodesOnCanvas(nextNodes);
     lastInitialSeedRef.current = {
-      concept,
-      knowledge: knowledgeEntries,
+      title: rootTitle,
+      requirements: concept?.requirements || "",
     };
     selectNodeOnCanvas(
       nextNodes.some((node) => node.id === selectedNodeId)
@@ -1477,7 +2213,41 @@ export const CKAgentPanel = ({
   useEffect(() => {
     syncLiveInitialNodes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialConcept, initialKnowledge, excalidrawAPI]);
+  }, [confirmedInitialConcept, excalidrawAPI]);
+
+  const confirmInitialConcept = () => {
+    if (confirmedInitialConcept) {
+      return;
+    }
+
+    const title = initialConceptTitle.trim();
+    if (!title) {
+      toast("Enter an initial concept title before confirming.");
+      return;
+    }
+
+    const requirements = initialConceptRequirements.trim();
+    setConfirmedInitialConcept({
+      title,
+      requirements,
+    });
+    setLatestDecision("Initial concept confirmed.");
+    setLatestRationale(
+      requirements || "No explicit requirements were provided.",
+    );
+  };
+
+  useEffect(() => {
+    if (!excalidrawAPI || !nodesRef.current.length) {
+      return;
+    }
+
+    const currentNodes = syncNodeGeometryFromCanvas(nodesRef.current);
+    redrawAllNodesOnCanvas(currentNodes, {
+      previousNodesOverride: currentNodes,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLineOfThoughtArrows, showNodeDescriptions, excalidrawAPI]);
 
   const applyPendingLayout = () => {
     if (pendingConceptLayout) {
@@ -1514,13 +2284,13 @@ export const CKAgentPanel = ({
     toast("There is no pending layout to apply.");
   };
 
-  const runOperation = async (operation: CKOperation) => {
+  const runOperation = async (operation: CKOperation, forceFocusNodeId?: string) => {
     const currentNodes = syncNodeGeometryFromCanvas(
       pruneDeletedGeneratedNodes(nodesRef.current),
     );
 
     if (!canRunOperations || !currentNodes.length) {
-      toast("Add initial concept and at least one knowledge entry.");
+      toast("Confirm the initial concept before running operations.");
       return;
     }
 
@@ -1529,8 +2299,9 @@ export const CKAgentPanel = ({
       return;
     }
 
-    const selectedFocusNode = selectedNodeId
-      ? currentNodes.find((node) => node.id === selectedNodeId) || null
+    const focusId = forceFocusNodeId ?? selectedNodeId;
+    const selectedFocusNode = focusId
+      ? currentNodes.find((node) => node.id === focusId) || null
       : null;
     const requiredFocusType = getRequiredFocusType(operation);
 
@@ -1598,7 +2369,7 @@ export const CKAgentPanel = ({
     try {
       const result = await runCKOperation({
         operation,
-        topic: initialConcept.trim(),
+        topic: topicForAgents,
         focusEntry: {
           id: focusNode.id,
           type: focusNode.type,
@@ -1853,22 +2624,159 @@ export const CKAgentPanel = ({
     setLatestRationale("");
   };
 
-  const addKnowledgeInput = () => {
-    setInitialKnowledge((prev) => [...prev, ""]);
+  const confirmNewKnowledge = async () => {
+    if (!excalidrawAPI || !newKnowledgeTitle.trim()) {
+      return;
+    }
+    setPlacingKnowledge(true);
+    try {
+      knowledgeCounterRef.current += 1;
+      const id = `K${knowledgeCounterRef.current}`;
+      const title = newKnowledgeTitle.trim();
+      const desc = newKnowledgeDesc.trim() || "";
+
+      // Ask the LLM where this knowledge fits in the archipelago
+      let connectedToIds: string[] = [];
+      let placementRationale = "";
+      try {
+        const placement = await placeCKKnowledge(
+          topicForAgents,
+          toContextEntries(nodesRef.current),
+          title,
+          desc,
+        );
+        connectedToIds = placement.connectedToIds;
+        placementRationale = placement.rationale;
+      } catch {
+        // Placement call failed — place as a standalone island
+      }
+
+      const arrowId = connectedToIds.length > 0 ? nextElementId("arrow") : null;
+      const extraArrowIds = connectedToIds
+        .slice(1)
+        .map(() => nextElementId("arrow"));
+
+      const newNode: CKCanvasNode = {
+        id,
+        type: "knowledge",
+        title,
+        desc,
+        operationRationale: "",
+        parentId: connectedToIds[0] ?? null,
+        sourceParentIds: connectedToIds,
+        x: getColumnX("knowledge"),
+        y: getNextColumnY("knowledge", nodesRef.current),
+        width: NODE_WIDTH,
+        height: estimateNodeHeight("knowledge", id, title, desc),
+        generated: false,
+        status: "accepted",
+        elementId: nextElementId("node"),
+        arrowId,
+        extraArrowIds,
+        sequence: sequenceRef.current++,
+      };
+      const nextNodes = [...nodesRef.current, newNode];
+      setNodes(nextNodes);
+      nodesRef.current = nextNodes;
+      syncNodeDerivedRefs(nextNodes);
+      addNodesToCanvas([newNode], nextNodes);
+      setNewKnowledgeTitle("");
+      setNewKnowledgeDesc("");
+
+      if (placementRationale) {
+        const connectionMsg =
+          connectedToIds.length > 0
+            ? `${id} connects to ${connectedToIds.join(", ")}.`
+            : `${id} is a new island.`;
+        setLatestDecision(connectionMsg);
+        setLatestRationale(placementRationale);
+      }
+    } finally {
+      setPlacingKnowledge(false);
+    }
   };
 
-  const removeKnowledgeInput = (index: number) => {
-    setInitialKnowledge((prev) => {
-      if (prev.length === 1) {
-        return prev;
+  const confirmNewConcept = async () => {
+    if (!excalidrawAPI || !newConceptTitle.trim()) {
+      return;
+    }
+    setPlacingConcept(true);
+    try {
+      const id = nextNodeId("concept");
+      const title = newConceptTitle.trim();
+      const desc = newConceptDesc.trim() || "";
+
+      let parentConceptId: string | null = null;
+      let placementRationale = "";
+      try {
+        const placement = await placeCKConcept(
+          topicForAgents,
+          toContextEntries(nodesRef.current),
+          title,
+          desc,
+        );
+        parentConceptId = placement.parentId;
+        placementRationale = placement.rationale;
+      } catch {
+        // Placement call failed — place as root branch
       }
-      return prev.filter((_, idx) => idx !== index);
-    });
+
+      const parentNode = parentConceptId
+        ? nodesRef.current.find(
+            (node) => node.id === parentConceptId && node.type === "concept",
+          ) || null
+        : null;
+      const arrowId = parentNode ? nextElementId("arrow") : null;
+      const y = parentNode
+        ? Math.max(
+            parentNode.y + parentNode.height + VERTICAL_GAP,
+            getNextColumnY("concept", nodesRef.current),
+          )
+        : getNextColumnY("concept", nodesRef.current);
+
+      const newNode: CKCanvasNode = {
+        id,
+        type: "concept",
+        title,
+        desc,
+        operationRationale: "",
+        parentId: parentNode?.id ?? null,
+        sourceParentIds: parentNode ? [parentNode.id] : [],
+        x: getColumnX("concept"),
+        y,
+        width: NODE_WIDTH,
+        height: estimateNodeHeight("concept", id, title, desc),
+        generated: false,
+        status: "accepted",
+        elementId: nextElementId("node"),
+        arrowId,
+        extraArrowIds: [],
+        sequence: sequenceRef.current++,
+      };
+
+      const nextNodes = [...nodesRef.current, newNode];
+      setNodes(nextNodes);
+      nodesRef.current = nextNodes;
+      syncNodeDerivedRefs(nextNodes);
+      addNodesToCanvas([newNode], nextNodes);
+      setNewConceptTitle("");
+      setNewConceptDesc("");
+
+      if (placementRationale) {
+        const connectionMsg = parentNode
+          ? `${id} connects to ${parentNode.id}.`
+          : `${id} is a new root branch.`;
+        setLatestDecision(connectionMsg);
+        setLatestRationale(placementRationale);
+      }
+    } finally {
+      setPlacingConcept(false);
+    }
   };
 
   const getOperationDisabledReason = (operation: CKOperation) => {
     if (!canRunOperations) {
-      return "Add an initial concept and at least one knowledge entry.";
+      return "Confirm the initial concept to get started.";
     }
     if (busyOperation !== null) {
       return busyOperation === operation
@@ -1899,6 +2807,28 @@ export const CKAgentPanel = ({
           Start with one concept and supporting knowledge, then use
           the action cards to expand, validate, and refine the map.
         </div>
+        <label className="ck-toggle-row" htmlFor="ck-toggle-line-of-thought">
+          <input
+            id="ck-toggle-line-of-thought"
+            type="checkbox"
+            checked={showLineOfThoughtArrows}
+            onChange={(event) =>
+              setShowLineOfThoughtArrows(event.target.checked)
+            }
+          />
+          <span>Show C&lt;-&gt;K line-of-thought arrows</span>
+        </label>
+        <label className="ck-toggle-row" htmlFor="ck-toggle-descriptions">
+          <input
+            id="ck-toggle-descriptions"
+            type="checkbox"
+            checked={showNodeDescriptions}
+            onChange={(event) =>
+              setShowNodeDescriptions(event.target.checked)
+            }
+          />
+          <span>Show node descriptions</span>
+        </label>
         <div className="ck-summary-grid">
           <div className="ck-summary-card">
             <div className="ck-summary-value">{conceptCount}</div>
@@ -1913,56 +2843,117 @@ export const CKAgentPanel = ({
             <div className="ck-summary-label">Suggestions</div>
           </div>
         </div>
-        <label htmlFor="ck-initial-concept" className="ck-agent-label">
-          Initial concept
+        <label htmlFor="ck-initial-concept-title" className="ck-agent-label">
+          Initial concept title
+        </label>
+        <input
+          id="ck-initial-concept-title"
+          className="ck-agent-input"
+          value={initialConceptTitle}
+          placeholder="Enter initial concept title..."
+          onChange={(event) => setInitialConceptTitle(event.target.value)}
+          disabled={confirmedInitialConcept !== null}
+        />
+        <label
+          htmlFor="ck-initial-concept-requirements"
+          className="ck-agent-label"
+        >
+          Initial concept requirements
         </label>
         <textarea
-          id="ck-initial-concept"
+          id="ck-initial-concept-requirements"
           className="ck-agent-input"
-          value={initialConcept}
-          placeholder="Enter one initial concept..."
-          onChange={(event) => setInitialConcept(event.target.value)}
+          value={initialConceptRequirements}
+          placeholder="Enter requirements/constraints (optional)..."
+          onChange={(event) => setInitialConceptRequirements(event.target.value)}
           rows={3}
+          disabled={confirmedInitialConcept !== null}
         />
-
-        <label className="ck-agent-label">Initial knowledge</label>
-        {initialKnowledge.map((entry, index) => (
-          <div key={`knowledge-${index}`} className="ck-knowledge-row">
-            <textarea
-              className="ck-agent-input"
-              value={entry}
-              placeholder={`Knowledge ${index + 1}`}
-              onChange={(event) =>
-                setInitialKnowledge((prev) =>
-                  prev.map((item, idx) =>
-                    idx === index ? event.target.value : item,
-                  ),
-                )
-              }
-              rows={2}
-            />
-            <button
-              className="ck-knowledge-remove"
-              type="button"
-              onClick={() => removeKnowledgeInput(index)}
-              disabled={initialKnowledge.length === 1}
-              aria-label={`Remove knowledge ${index + 1}`}
-              title={
-                initialKnowledge.length === 1
-                  ? "At least one knowledge entry is required"
-                  : "Remove this knowledge entry"
-              }
-            >
-              x
-            </button>
-          </div>
-        ))}
         <button
-          className="ck-small-button"
+          className="ck-small-button ck-small-button--primary"
           type="button"
-          onClick={addKnowledgeInput}
+          onClick={confirmInitialConcept}
+          disabled={confirmedInitialConcept !== null || !initialConceptTitle.trim()}
         >
-          + Add knowledge
+          {confirmedInitialConcept ? "Initial concept locked" : "Confirm initial concept"}
+        </button>
+
+        <label htmlFor="ck-new-concept-title" className="ck-agent-label">
+          Add concept
+        </label>
+        <input
+          id="ck-new-concept-title"
+          className="ck-agent-input"
+          value={newConceptTitle}
+          placeholder="Concept title..."
+          onChange={(e) => setNewConceptTitle(e.target.value)}
+          disabled={confirmedInitialConcept === null}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              confirmNewConcept();
+            }
+          }}
+        />
+        <textarea
+          className="ck-agent-input"
+          value={newConceptDesc}
+          placeholder="Description (optional)..."
+          onChange={(e) => setNewConceptDesc(e.target.value)}
+          rows={2}
+          disabled={confirmedInitialConcept === null}
+        />
+        <button
+          className="ck-small-button ck-small-button--primary"
+          type="button"
+          onClick={confirmNewConcept}
+          disabled={
+            !newConceptTitle.trim() ||
+            placingConcept ||
+            confirmedInitialConcept === null
+          }
+          aria-busy={placingConcept}
+        >
+          {placingConcept ? "Placing..." : "Add concept to board"}
+        </button>
+
+        <label htmlFor="ck-new-knowledge-title" className="ck-agent-label">
+          Add knowledge
+        </label>
+        <input
+          id="ck-new-knowledge-title"
+          className="ck-agent-input"
+          value={newKnowledgeTitle}
+          placeholder="Knowledge title..."
+          onChange={(e) => setNewKnowledgeTitle(e.target.value)}
+          disabled={confirmedInitialConcept === null}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              confirmNewKnowledge();
+            }
+          }}
+        />
+        <textarea
+          className="ck-agent-input"
+          value={newKnowledgeDesc}
+          placeholder="Description (optional)..."
+          onChange={(e) => setNewKnowledgeDesc(e.target.value)}
+          rows={2}
+          disabled={confirmedInitialConcept === null}
+        />
+        <button
+          className="ck-small-button ck-small-button--primary"
+          type="button"
+          onClick={confirmNewKnowledge}
+          disabled={
+            !newKnowledgeTitle.trim() ||
+            placingKnowledge ||
+            confirmedInitialConcept === null
+          }
+          aria-busy={placingKnowledge}
+        >
+          {placingKnowledge ? "Placing..." : "Add to board"}
         </button>
       </div>
 
@@ -1992,55 +2983,58 @@ export const CKAgentPanel = ({
             running more actions.
           </div>
         ) : null}
-        <div className="ck-actions-grid">
-          {ACTIONS.map((operation) => {
-            const disabledReason = getOperationDisabledReason(operation);
-            const requiredFocusType = getRequiredFocusType(operation);
-            const isBusy = busyOperation === operation;
-            const isMatched =
-              requiredFocusType !== null &&
-              selectedNode?.type === requiredFocusType;
+        {ACTION_GROUPS.map((group) => (
+          <div key={group.label} className="ck-action-group">
+            <div className="ck-action-group__label">{group.label}</div>
+            <div className="ck-actions-grid">
+              {group.operations.map((operation) => {
+                const disabledReason = getOperationDisabledReason(operation);
+                const requiredFocusType = getRequiredFocusType(operation);
+                const isBusy = busyOperation === operation;
+                const isMatched =
+                  requiredFocusType !== null &&
+                  selectedNode?.type === requiredFocusType;
+                const theme = OPERATION_THEME[operation];
 
-            return (
-              <button
-                key={operation}
-                type="button"
-                className={`ck-action-button${isBusy ? " is-busy" : ""}${
-                  isMatched ? " is-matched" : ""
-                }${disabledReason ? " is-disabled" : ""}`}
-                disabled={disabledReason !== null}
-                onClick={() => runOperation(operation)}
-                aria-busy={isBusy}
-                title={disabledReason || OPERATION_DESCRIPTIONS[operation]}
-              >
-                <span className="ck-action-button__top">
-                  <span className="ck-action-button__label">
-                    {isBusy
-                      ? `Running: ${OPERATION_LABELS[operation]}...`
-                      : OPERATION_LABELS[operation]}
-                  </span>
-                  <span
-                    className={`ck-action-badge${
-                      isMatched ? " is-matched" : ""
-                    }`}
+                return (
+                  <button
+                    key={operation}
+                    type="button"
+                    className={[
+                      "ck-action-button",
+                      `ck-action-button--${theme}`,
+                      isBusy ? "is-busy" : "",
+                      isMatched ? "is-matched" : "",
+                      disabledReason ? "is-disabled" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    disabled={disabledReason !== null}
+                    onClick={() => runOperation(operation)}
+                    aria-busy={isBusy}
+                    title={disabledReason || OPERATION_DESCRIPTIONS[operation]}
                   >
-                    {requiredFocusType
-                      ? `Needs ${formatNodeTypeLabel(requiredFocusType)}`
-                      : "Flexible"}
-                  </span>
-                </span>
-                <span className="ck-action-button__desc">
-                  {OPERATION_DESCRIPTIONS[operation]}
-                </span>
-                {disabledReason ? (
-                  <span className="ck-action-button__meta">
-                    {disabledReason}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+                    <span className="ck-action-button__top">
+                      <span className="ck-action-button__label">
+                        {isBusy
+                          ? `Running: ${OPERATION_LABELS[operation]}...`
+                          : OPERATION_LABELS[operation]}
+                      </span>
+                    </span>
+                    <span className="ck-action-button__desc">
+                      {OPERATION_DESCRIPTIONS[operation]}
+                    </span>
+                    {disabledReason ? (
+                      <span className="ck-action-button__meta">
+                        {disabledReason}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="ck-agent-section">

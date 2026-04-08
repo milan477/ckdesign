@@ -273,3 +273,56 @@ class KnowledgeAgent:
             "is_valid": parsed["is_valid"],
             "rationale": parsed["rationale"],
         }
+
+    _PLACEMENT_PATTERN = re.compile(
+        r"^\s*CONNECTED_TO:\s*(?P<connected>.+?)\s*$"
+        r"(?:\r?\n)+"
+        r"\s*RATIONALE:\s*(?P<rationale>.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+
+    def PlaceKnowledge(self, ck_history, topic: str, new_knowledge_title: str, new_knowledge_desc: str):
+        """Decide which existing knowledge nodes the new knowledge connects to, if any."""
+        knowledge_entries = [
+            self._entry_to_dict(e)
+            for e in ck_history
+            if self._entry_to_dict(e).get("type", "").lower() == "knowledge"
+        ]
+        valid_ids = {e["id"] for e in knowledge_entries}
+
+        existing_json = json.dumps(
+            [{"id": e["id"], "title": e["title"], "desc": e["desc"]} for e in knowledge_entries],
+            indent=2,
+        )
+        new_json = json.dumps({"title": new_knowledge_title, "desc": new_knowledge_desc}, indent=2)
+
+        prompt = CKPromptEngine.place_knowledge_in_archipelago(topic, existing_json, new_json)
+
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+
+        content = response.choices[0].message.content or ""
+        match = self._PLACEMENT_PATTERN.search(content)
+
+        if not match:
+            return [], "Could not determine placement — treating as a new island."
+
+        connected_raw = match.group("connected").strip()
+        rationale = self._normalize_field(match.group("rationale"))
+
+        if connected_raw.lower() == "none":
+            connected_ids = []
+        else:
+            connected_ids = [
+                cid.strip()
+                for cid in connected_raw.split(",")
+                if cid.strip() in valid_ids
+            ]
+
+        return connected_ids, rationale

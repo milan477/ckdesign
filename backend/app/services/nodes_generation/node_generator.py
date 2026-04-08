@@ -348,6 +348,24 @@ class CKAgent:
             focus_entry_id=focus_entry_id,
         )
 
+    def place_knowledge(self, ck_history, topic: str, new_knowledge_title: str, new_knowledge_desc: str):
+        """Decide which existing knowledge nodes the new entry connects to, if any."""
+        return self.knowledge_agent.PlaceKnowledge(
+            ck_history,
+            topic,
+            new_knowledge_title,
+            new_knowledge_desc,
+        )
+
+    def place_concept(self, ck_history, topic: str, new_concept_title: str, new_concept_desc: str):
+        """Decide which existing concept node should parent the new concept, if any."""
+        return self.concept_agent.PlaceConcept(
+            ck_history,
+            topic,
+            new_concept_title,
+            new_concept_desc,
+        )
+
     def get_k(self, topic):
         """Initialize knowledge entries"""
 

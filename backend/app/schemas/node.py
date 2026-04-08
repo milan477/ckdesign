@@ -135,3 +135,27 @@ class DecideNovelConceptResponse(BaseModel):
     selected_concept_id: str
     rationale: str
     scores: NovelConceptScores
+
+
+class PlaceKnowledgeRequest(BaseModel):
+    topic: str
+    ck_history: List[CKEntry]
+    new_knowledge_title: str
+    new_knowledge_desc: str = ""
+
+
+class PlaceKnowledgeResponse(BaseModel):
+    connected_to_ids: List[str]
+    rationale: str
+
+
+class PlaceConceptRequest(BaseModel):
+    topic: str
+    ck_history: List[CKEntry]
+    new_concept_title: str
+    new_concept_desc: str = ""
+
+
+class PlaceConceptResponse(BaseModel):
+    parent_id: Optional[str] = None
+    rationale: str

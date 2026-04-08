@@ -783,6 +783,86 @@ const runRemoteOperation = async (
   throw new Error(`Unsupported operation: ${input.operation}`);
 };
 
+export interface PlaceKnowledgeResult {
+  connectedToIds: string[];
+  rationale: string;
+}
+
+export interface PlaceConceptResult {
+  parentId: string | null;
+  rationale: string;
+}
+
+export const placeCKKnowledge = async (
+  topic: string,
+  history: CKEntryContext[],
+  newKnowledgeTitle: string,
+  newKnowledgeDesc: string,
+): Promise<PlaceKnowledgeResult> => {
+  const backend = import.meta.env.VITE_APP_AI_BACKEND?.trim();
+  if (!backend) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured.");
+  }
+  const base = backend.replace(/\/$/, "");
+  const response = await fetch(`${base}/nodes/place-knowledge`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      topic,
+      ck_history: toBackendHistory(history),
+      new_knowledge_title: newKnowledgeTitle,
+      new_knowledge_desc: newKnowledgeDesc,
+    }),
+  });
+  if (!response.ok) {
+    const message = await readResponseError(response);
+    throw new Error(`Backend /nodes/place-knowledge failed (${response.status}): ${message}`);
+  }
+  const payload = (await response.json()) as {
+    connected_to_ids?: string[];
+    rationale?: string;
+  };
+  return {
+    connectedToIds: Array.isArray(payload.connected_to_ids) ? payload.connected_to_ids : [],
+    rationale: payload.rationale || "",
+  };
+};
+
+export const placeCKConcept = async (
+  topic: string,
+  history: CKEntryContext[],
+  newConceptTitle: string,
+  newConceptDesc: string,
+): Promise<PlaceConceptResult> => {
+  const backend = import.meta.env.VITE_APP_AI_BACKEND?.trim();
+  if (!backend) {
+    throw new Error("VITE_APP_AI_BACKEND is not configured.");
+  }
+  const base = backend.replace(/\/$/, "");
+  const response = await fetch(`${base}/nodes/place-concept`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      topic,
+      ck_history: toBackendHistory(history),
+      new_concept_title: newConceptTitle,
+      new_concept_desc: newConceptDesc,
+    }),
+  });
+  if (!response.ok) {
+    const message = await readResponseError(response);
+    throw new Error(`Backend /nodes/place-concept failed (${response.status}): ${message}`);
+  }
+  const payload = (await response.json()) as {
+    parent_id?: string | null;
+    rationale?: string;
+  };
+  return {
+    parentId: typeof payload.parent_id === "string" ? payload.parent_id : null,
+    rationale: payload.rationale || "",
+  };
+};
+
 export const runCKOperation = async (
   input: CKOperationInput,
 ): Promise<CKOperationResult> => {

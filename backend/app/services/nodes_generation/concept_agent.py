@@ -21,6 +21,12 @@ class ConceptAgent:
         r"(?:\r?\n)+\s*RATIONALE:\s*(?P<rationale>[^\r\n]+)",
         re.IGNORECASE,
     )
+    _PLACEMENT_PATTERN = re.compile(
+        r"^\s*PARENT_ID:\s*(?P<parent>.+?)\s*$"
+        r"(?:\r?\n)+"
+        r"\s*RATIONALE:\s*(?P<rationale>.+?)\s*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
 
     def __init__(self, llm_model: str = "gpt-4.1", ai_client: OpenAIClient = None):
         self.ai = ai_client or OpenAIClient(llm_model=llm_model)
@@ -257,3 +263,47 @@ class ConceptAgent:
             "rationale": rationale,
             "scores": scores,
         }
+
+    def PlaceConcept(self, ck_history, topic: str, new_concept_title: str, new_concept_desc: str):
+        """Decide the best parent concept for a new concept, if any."""
+        concept_entries = [
+            self._entry_to_dict(e)
+            for e in ck_history
+            if self._entry_to_dict(e).get("type", "").lower() == "concept"
+        ]
+        valid_ids = {e["id"] for e in concept_entries}
+
+        existing_json = json.dumps(
+            [{"id": e["id"], "title": e["title"], "desc": e["desc"]} for e in concept_entries],
+            indent=2,
+        )
+        new_json = json.dumps({"title": new_concept_title, "desc": new_concept_desc}, indent=2)
+
+        prompt = CKPromptEngine.place_concept_in_tree(topic, existing_json, new_json)
+
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": CKPromptEngine.SYSTEM_CK_EXPERT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+
+        content = response.choices[0].message.content or ""
+        match = self._PLACEMENT_PATTERN.search(content)
+
+        if not match:
+            return None, "Could not determine placement — treating as a new root branch."
+
+        parent_raw = self._normalize_field(match.group("parent"))
+        rationale = self._normalize_field(match.group("rationale"))
+
+        if parent_raw.lower() == "none":
+            parent_id = None
+        elif parent_raw in valid_ids:
+            parent_id = parent_raw
+        else:
+            parent_id = None
+
+        return parent_id, rationale

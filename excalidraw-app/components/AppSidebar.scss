@@ -94,6 +94,21 @@
     color: var(--text-secondary-color);
   }
 
+  .ck-toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary-color);
+    cursor: pointer;
+  }
+
+  .ck-toggle-row input {
+    margin: 0;
+    accent-color: #1864ab;
+    cursor: pointer;
+  }
+
   .ck-summary-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -280,10 +295,25 @@
     font-weight: 700;
   }
 
+  .ck-action-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .ck-action-group__label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary-color);
+    padding: 0 0.1rem;
+  }
+
   .ck-actions-grid {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 0.55rem;
+    gap: 0.45rem;
   }
 
   .ck-action-button {
@@ -293,16 +323,93 @@
     padding: 0.75rem;
     border-radius: 0.85rem;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 55%),
+      linear-gradient(160deg, rgba(255, 255, 255, 0.55), transparent 55%),
       var(--default-bg-color);
     text-align: left;
   }
 
-  .ck-action-button.is-matched {
-    border-color: rgba(24, 100, 171, 0.32);
-    background:
-      linear-gradient(180deg, rgba(231, 245, 255, 0.95), transparent 64%),
-      var(--default-bg-color);
+  // C→K: concept yellow top → knowledge green bottom (two spaces, gradient)
+  .ck-action-button--c-to-k {
+    border-color: rgba(240, 140, 0, 0.16);
+    background: linear-gradient(180deg, rgba(255, 249, 219, 0.6) 0%, rgba(235, 251, 238, 0.6) 100%);
+  }
+  .ck-action-button--c-to-k:hover:not(:disabled) {
+    border-color: rgba(43, 138, 62, 0.24);
+    background: linear-gradient(180deg, rgba(255, 249, 219, 0.45) 0%, rgba(235, 251, 238, 0.45) 100%);
+  }
+  .ck-action-button--c-to-k.is-matched {
+    border-color: rgba(240, 140, 0, 0.28);
+    background: linear-gradient(180deg, rgba(255, 243, 163, 0.55) 0%, rgba(211, 249, 216, 0.55) 100%);
+  }
+
+  // K→K: knowledge green flat (single space, no gradient)
+  .ck-action-button--k-to-k {
+    border-color: rgba(43, 138, 62, 0.16);
+    background: rgba(235, 251, 238, 0.65);
+  }
+  .ck-action-button--k-to-k:hover:not(:disabled) {
+    border-color: rgba(43, 138, 62, 0.26);
+    background: rgba(235, 251, 238, 0.48);
+  }
+  .ck-action-button--k-to-k.is-matched {
+    border-color: rgba(43, 138, 62, 0.34);
+    background: rgba(211, 249, 216, 0.6);
+  }
+
+  // K→C: knowledge green top → concept yellow bottom (two spaces, gradient)
+  .ck-action-button--k-to-c {
+    border-color: rgba(43, 138, 62, 0.16);
+    background: linear-gradient(180deg, rgba(235, 251, 238, 0.6) 0%, rgba(255, 249, 219, 0.6) 100%);
+  }
+  .ck-action-button--k-to-c:hover:not(:disabled) {
+    border-color: rgba(240, 140, 0, 0.24);
+    background: linear-gradient(180deg, rgba(235, 251, 238, 0.45) 0%, rgba(255, 249, 219, 0.45) 100%);
+  }
+  .ck-action-button--k-to-c.is-matched {
+    border-color: rgba(43, 138, 62, 0.28);
+    background: linear-gradient(180deg, rgba(211, 249, 216, 0.55) 0%, rgba(255, 243, 163, 0.55) 100%);
+  }
+
+  // C→C: concept yellow flat (single space, no gradient)
+  .ck-action-button--c-to-c {
+    border-color: rgba(240, 140, 0, 0.16);
+    background: rgba(255, 249, 219, 0.65);
+  }
+  .ck-action-button--c-to-c:hover:not(:disabled) {
+    border-color: rgba(240, 140, 0, 0.26);
+    background: rgba(255, 249, 219, 0.48);
+  }
+  .ck-action-button--c-to-c.is-matched {
+    border-color: rgba(240, 140, 0, 0.34);
+    background: rgba(255, 243, 163, 0.6);
+  }
+
+  // Restructure concept: concept board color (yellow), flat
+  .ck-action-button--restructure-concept {
+    border-color: rgba(240, 140, 0, 0.12);
+    background: rgba(255, 249, 219, 0.5);
+  }
+  .ck-action-button--restructure-concept:hover:not(:disabled) {
+    border-color: rgba(240, 140, 0, 0.2);
+    background: rgba(255, 249, 219, 0.38);
+  }
+
+  // Restructure knowledge: knowledge board color (green), flat
+  .ck-action-button--restructure-knowledge {
+    border-color: rgba(43, 138, 62, 0.14);
+    background: rgba(235, 251, 238, 0.55);
+  }
+  .ck-action-button--restructure-knowledge:hover:not(:disabled) {
+    border-color: rgba(43, 138, 62, 0.22);
+    background: rgba(235, 251, 238, 0.4);
+  }
+
+  // Evaluate: neutral
+  .ck-action-button--evaluate {
+    background: rgba(255, 255, 255, 0.35);
+  }
+  .ck-action-button--evaluate:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.25);
   }
 
   .ck-action-button.is-busy {
@@ -346,13 +453,41 @@
     font-size: 0.69rem;
     font-weight: 700;
     letter-spacing: 0.02em;
-    border: 1px solid rgba(24, 100, 171, 0.12);
-    background: rgba(24, 100, 171, 0.06);
-    color: #1864ab;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.55);
+    color: var(--text-secondary-color);
+  }
+
+  .ck-action-badge--c-to-k,
+  .ck-action-badge--c-to-c {
+    border-color: rgba(240, 140, 0, 0.22);
+    background: rgba(255, 249, 219, 0.9);
+    color: #9c5b00;
+  }
+  .ck-action-badge--k-to-k,
+  .ck-action-badge--k-to-c {
+    border-color: rgba(43, 138, 62, 0.2);
+    background: rgba(235, 251, 238, 0.9);
+    color: #2b6b3c;
+  }
+  .ck-action-badge--restructure-concept {
+    border-color: rgba(240, 140, 0, 0.18);
+    background: rgba(255, 249, 219, 0.8);
+    color: #9c5b00;
+  }
+  .ck-action-badge--restructure-knowledge {
+    border-color: rgba(43, 138, 62, 0.18);
+    background: rgba(235, 251, 238, 0.8);
+    color: #2b6b3c;
+  }
+  .ck-action-badge--evaluate {
+    border-color: rgba(0, 0, 0, 0.08);
+    background: rgba(255, 255, 255, 0.5);
+    color: var(--text-secondary-color);
   }
 
   .ck-action-badge.is-matched {
-    background: rgba(24, 100, 171, 0.12);
+    background: rgba(43, 138, 62, 0.14);
   }
 
   .ck-action-button:disabled,

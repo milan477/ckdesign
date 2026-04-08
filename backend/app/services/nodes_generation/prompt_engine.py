@@ -576,3 +576,47 @@ Rules:
             "rationale": "K1 and K2 were merged because they repeated the same evidence, while the remaining entries were nested to reduce duplication."
         }}
         """
+
+    @staticmethod
+    def place_knowledge_in_archipelago(topic: str, existing_knowledge_json: str, new_knowledge_json: str) -> str:
+        """Decide if new knowledge connects to existing knowledge nodes or stands alone as a new island."""
+        return f"""You are mapping a knowledge archipelago — a space of ideas that form islands, some connected, some isolated.
+
+Topic: {topic}
+
+Existing knowledge in the map:
+{existing_knowledge_json}
+
+New knowledge to place:
+{new_knowledge_json}
+
+Decide whether this new knowledge connects to any existing knowledge entries. A connection means there is a meaningful intellectual relationship — such as a dependency, elaboration, contrast, shared context, or mutual reinforcement. Do NOT connect entries just because their topics superficially overlap.
+
+If the new knowledge is genuinely distinct — a new island in the archipelago — list no connections.
+If it connects to one or more existing entries, list their IDs.
+
+Respond in exactly this format (no extra text):
+CONNECTED_TO: <comma-separated knowledge IDs, e.g. K1, K3> or CONNECTED_TO: none
+RATIONALE: <2-3 sentences explaining the placement decision>"""
+
+    @staticmethod
+    def place_concept_in_tree(topic: str, existing_concepts_json: str, new_concept_json: str) -> str:
+        """Decide the best parent concept for a new concept, or none if it should be a new root branch."""
+        return f"""You are organizing a concept tree for C-space exploration.
+
+Topic: {topic}
+
+Existing concepts in the map:
+{existing_concepts_json}
+
+New concept to place:
+{new_concept_json}
+
+Choose the single best parent concept ID for this new concept.
+- Prefer a parent that this concept concretely extends, specializes, or branches from.
+- If no existing concept is an appropriate parent, return C0.
+- Do not choose multiple parents.
+
+Respond in exactly this format (no extra text):
+PARENT_ID: <concept ID, e.g. C3> or PARENT_ID: C0
+RATIONALE: <2-3 sentences explaining the placement decision>"""

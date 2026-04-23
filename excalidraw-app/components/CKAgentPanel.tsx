@@ -20,6 +20,10 @@ import {
   type CKNodeType,
   type CKOperation,
 } from "../services/ckAgent";
+import { getStoredSession } from "../services/auth";
+import { saveBoard, loadBoard, pushBoard } from "../services/sessions";
+import { LocalData } from "../data/LocalData";
+import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 
 const NODE_WIDTH = 320;
 const NODE_HEIGHT = 160;
@@ -58,6 +62,18 @@ const NOVEL_MARKER_OFFSET_Y = 90;
 const VALIDATION_MARKER_SIZE = 56;
 const VALIDATION_MARKER_OFFSET_X = 32;
 const VALIDATION_MARKER_OFFSET_Y = 18;
+const VSTATUS_FONT_SIZE = 14;
+const VSTATUS_ICONS: Record<ValidationStatus, string> = {
+  approved: "✓",
+  undecided: "?",
+  rejected: "✗",
+};
+const VSTATUS_COLORS: Record<ValidationStatus, string> = {
+  approved: "#2f9e44",
+  undecided: "#f08c00",
+  rejected: "#c92a2a",
+};
+
 const CTX_BUTTON_ID_PREFIX = "ck-ctx-btn";
 const CTX_BUTTON_WIDTH = 138;
 const CTX_BUTTON_HEIGHT = 28;
@@ -87,6 +103,7 @@ const CTX_BUTTON_LABELS: Record<CKOperation, string> = {
 };
 
 type NodeStatus = "pending" | "accepted";
+type ValidationStatus = "undecided" | "approved" | "rejected";
 
 type CKCanvasNode = CKEntryContext & {
   x: number;
@@ -100,7 +117,21 @@ type CKCanvasNode = CKEntryContext & {
   extraArrowIds: string[];
   sourceParentIds: string[];
   sequence: number;
+  createdAt: string;
+  validationStatus?: ValidationStatus;
 };
+
+interface CKBoardState {
+  nodes: CKCanvasNode[];
+  confirmedInitialConcept: { title: string; requirements: string } | null;
+  novelConceptId: string | null;
+  novelMarkerElementId: string | null;
+  validationMarkerElementIds: Record<string, string>;
+  validationStates: Record<string, boolean>;
+  showLineOfThoughtArrows: boolean;
+  showNodeDescriptions: boolean;
+  savedAt: string;
+}
 
 const ACTION_GROUPS: readonly {
   label: string;
@@ -161,23 +192,23 @@ const OPERATION_DESCRIPTIONS: Record<CKOperation, string> = {
 const formatNodeTypeLabel = (type: CKNodeType) =>
   type === "concept" ? "Concept" : "Knowledge";
 
+const VALIDATION_COLORS: Record<ValidationStatus, { strokeColor: string; backgroundColor: string }> = {
+  undecided: { strokeColor: "#f08c00", backgroundColor: "#fff4e6" },
+  approved:    { strokeColor: "#2f9e44", backgroundColor: "#ebfbee" },
+  rejected:    { strokeColor: "#c92a2a", backgroundColor: "#fff5f5" },
+};
+
 const getNodeColors = (
   type: CKNodeType,
   _status: NodeStatus,
   _nodeId?: string,
   _generated?: boolean,
+  validationStatus?: ValidationStatus,
 ) => {
   if (type === "concept") {
-    return {
-      strokeColor: "#f08c00",
-      backgroundColor: "#fff4e6",
-    };
+    return VALIDATION_COLORS[validationStatus ?? "undecided"];
   }
-  return {
-    // Keep knowledge entries on the previous blue style.
-    strokeColor: "#1864ab",
-    backgroundColor: "#e7f5ff",
-  };
+  return { strokeColor: "#1864ab", backgroundColor: "#e7f5ff" };
 };
 
 const getColumnX = (type: CKNodeType) =>
@@ -286,6 +317,9 @@ const toContextEntries = (nodes: CKCanvasNode[]): CKEntryContext[] =>
     operationRationale: node.operationRationale,
     parentId: node.parentId,
     sourceParentIds: node.sourceParentIds,
+    ...(node.type === "concept" && node.id !== "C0" && node.validationStatus
+      ? { validationStatus: node.validationStatus }
+      : {}),
   }));
 
 const layoutColumnNodes = (columnNodes: CKCanvasNode[]) =>
@@ -548,6 +582,8 @@ export const CKAgentPanel = ({
   const [showLineOfThoughtArrows, setShowLineOfThoughtArrows] =
     useState(true);
   const [showNodeDescriptions, setShowNodeDescriptions] = useState(true);
+  const [isPushing, setIsPushing] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const conceptCounterRef = useRef(0);
   const knowledgeCounterRef = useRef(-1);
@@ -569,6 +605,17 @@ export const CKAgentPanel = ({
   const validationMarkerElementIdsRef = useRef<Record<string, string>>({});
   const validationStatesRef = useRef<Record<string, boolean>>({});
   const contextButtonParentIdRef = useRef<string | null>(null);
+
+  // ─── Board persistence ──────────────────────────────────────────────────
+  const _session = getStoredSession();
+  const sessionId = _session?.id ?? null;
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canvasSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasLoadedFromDbRef = useRef(false);
+  // Ref-mirrors of state for use in async callbacks (avoids stale closures)
+  const confirmedInitialConceptRef = useRef(confirmedInitialConcept);
+  const showLineOfThoughtArrowsRef = useRef(showLineOfThoughtArrows);
+  const showNodeDescriptionsRef = useRef(showNodeDescriptions);
   const isUpdatingContextButtonsRef = useRef(false);
   const lastContextButtonPosRef = useRef<{
     nodeId: string;
@@ -615,12 +662,187 @@ export const CKAgentPanel = ({
     nodesRef.current = nodes;
   }, [nodes]);
 
+  useEffect(() => { confirmedInitialConceptRef.current = confirmedInitialConcept; }, [confirmedInitialConcept]);
+  useEffect(() => { showLineOfThoughtArrowsRef.current = showLineOfThoughtArrows; }, [showLineOfThoughtArrows]);
+  useEffect(() => { showNodeDescriptionsRef.current = showNodeDescriptions; }, [showNodeDescriptions]);
+
   const clearPendingLayouts = () => {
     pendingConceptLayoutBaseNodesRef.current = null;
     setPendingConceptLayout(null);
     pendingKnowledgeLayoutBaseNodesRef.current = null;
     setPendingKnowledgeLayout(null);
   };
+
+  // ─── Serialization ────────────────────────────────────────────────────────
+  const serializeCKState = (): CKBoardState => ({
+    nodes: nodesRef.current,
+    confirmedInitialConcept: confirmedInitialConceptRef.current,
+    novelConceptId: novelConceptIdRef.current,
+    novelMarkerElementId: novelMarkerElementIdRef.current,
+    validationMarkerElementIds: { ...validationMarkerElementIdsRef.current },
+    validationStates: { ...validationStatesRef.current },
+    showLineOfThoughtArrows: showLineOfThoughtArrowsRef.current,
+    showNodeDescriptions: showNodeDescriptionsRef.current,
+    savedAt: new Date().toISOString(),
+  });
+
+  const restoreCKState = (state: CKBoardState) => {
+    if (state.confirmedInitialConcept) {
+      setInitialConceptTitle(state.confirmedInitialConcept.title);
+      setInitialConceptRequirements(state.confirmedInitialConcept.requirements);
+      setConfirmedInitialConcept(state.confirmedInitialConcept);
+      lastInitialSeedRef.current = state.confirmedInitialConcept;
+    }
+    if (state.nodes?.length) {
+      const migratedNodes = state.nodes.map((n) => ({
+        ...n,
+        createdAt: n.createdAt || new Date().toISOString(),
+      }));
+      setNodes(migratedNodes);
+      nodesRef.current = migratedNodes;
+      syncNodeDerivedRefs(migratedNodes);
+    }
+    novelConceptIdRef.current = state.novelConceptId ?? null;
+    novelMarkerElementIdRef.current = state.novelMarkerElementId ?? null;
+    validationMarkerElementIdsRef.current = state.validationMarkerElementIds ?? {};
+    validationStatesRef.current = state.validationStates ?? {};
+    if (state.showLineOfThoughtArrows !== undefined) {
+      setShowLineOfThoughtArrows(state.showLineOfThoughtArrows);
+    }
+    if (state.showNodeDescriptions !== undefined) {
+      setShowNodeDescriptions(state.showNodeDescriptions);
+    }
+  };
+
+  // ─── Auto-save (debounced 2.5 s after any node change) ───────────────────
+  useEffect(() => {
+    if (!sessionId || !excalidrawAPI || !nodesRef.current.length) return;
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(async () => {
+      const elements = Array.from(excalidrawAPI.getSceneElements());
+      const ckState = serializeCKState();
+      const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
+      try {
+        await saveBoard(sessionId, elements as unknown[], ckState as unknown, { scrollX, scrollY, zoom });
+      } catch (err) {
+        console.warn("[CKBoard] Auto-save failed:", err);
+      }
+    }, 2500);
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, sessionId]);
+
+  // ─── Apply merged state when merge completes ─────────────────────────────
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { mergedState } = (e as CustomEvent).detail ?? {};
+      if (mergedState && typeof mergedState === "object" && "nodes" in mergedState) {
+        restoreCKState(mergedState as CKBoardState);
+        if (excalidrawAPI) {
+          const elements = (mergedState as CKBoardState).nodes
+            .map((n) => n.elementId)
+            .filter(Boolean);
+          // Full redraw will happen naturally via restoreCKState + next render
+        }
+      }
+    };
+    window.addEventListener("ck-merge-apply", handler);
+    return () => window.removeEventListener("ck-merge-apply", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excalidrawAPI]);
+
+  // ─── Disable localStorage while session is active ────────────────────────
+  useEffect(() => {
+    LocalData.pauseSave("collaboration");
+    return () => LocalData.resumeSave("collaboration");
+  }, []);
+
+  // ─── Load from DB on mount ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!excalidrawAPI || !sessionId || hasLoadedFromDbRef.current) return;
+    hasLoadedFromDbRef.current = true;
+
+    loadBoard(sessionId)
+      .then((board) => {
+        const currentSession = getStoredSession();
+        console.log("[CKBoard] loadBoard result:", {
+          sessionId,
+          boardFound: !!board,
+          elementCount: (board?.elements as unknown[] | null)?.length ?? 0,
+          hasCKNodes: !!board?.ck_nodes && !Array.isArray(board.ck_nodes),
+        });
+
+        if (!board || !(board.elements as unknown[])?.length) {
+          // No saved board or empty board — seed from session metadata
+          if (currentSession?.initial_concept) {
+            const title = currentSession.initial_concept;
+            const requirements = currentSession.requirements ?? "";
+            setInitialConceptTitle(title);
+            setInitialConceptRequirements(requirements);
+            setConfirmedInitialConcept({ title, requirements });
+            lastInitialSeedRef.current = { title, requirements };
+          }
+          if (!board) return;
+        }
+
+        const restoredElements = restoreElements(
+          board.elements as ExcalidrawElement[],
+          null,
+          { repairBindings: true, deleteInvisibleElements: false },
+        );
+        console.log("[CKBoard] restored elements:", restoredElements.length);
+
+        const appStateFromDB = board.app_state as Record<string, unknown> | null;
+        const sceneUpdate: Parameters<typeof excalidrawAPI.updateScene>[0] = {
+          elements: restoredElements,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        };
+        if (appStateFromDB?.scrollX != null || appStateFromDB?.zoom != null) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          sceneUpdate.appState = {
+            ...(appStateFromDB.scrollX != null ? { scrollX: appStateFromDB.scrollX as number } : {}),
+            ...(appStateFromDB.scrollY != null ? { scrollY: appStateFromDB.scrollY as number } : {}),
+            ...(appStateFromDB.zoom != null ? { zoom: appStateFromDB.zoom as { value: number } } : {}),
+          } as any;
+        }
+        excalidrawAPI.updateScene(sceneUpdate);
+
+        // Reorder restored elements so column bgs are first (they may have been
+        // saved in wrong order by an older version, causing them to render on top).
+        {
+          const BG_IDS_DB = new Set([CONCEPT_COLUMN_BG_ID, KNOWLEDGE_COLUMN_BG_ID]);
+          const allRestored = Array.from(excalidrawAPI.getSceneElementsIncludingDeleted());
+          const bgFirst = allRestored.filter((el) => BG_IDS_DB.has(el.id));
+          const nonBg = allRestored.filter((el) => !BG_IDS_DB.has(el.id));
+          if (bgFirst.length > 0) {
+            excalidrawAPI.updateScene({
+              elements: [...bgFirst, ...nonBg],
+              captureUpdate: CaptureUpdateAction.NEVER,
+            });
+          }
+        }
+
+        const raw = board.ck_nodes as unknown;
+        if (raw && typeof raw === "object" && !Array.isArray(raw) && "nodes" in raw) {
+          restoreCKState(raw as CKBoardState);
+          hasHydratedFromCanvasRef.current = true;
+        }
+      })
+      .catch((err) => {
+        console.error("[CKBoard] Load failed:", err);
+        const currentSession = getStoredSession();
+        if (currentSession?.initial_concept) {
+          const title = currentSession.initial_concept;
+          const requirements = currentSession.requirements ?? "";
+          setInitialConceptTitle(title);
+          setInitialConceptRequirements(requirements);
+          setConfirmedInitialConcept({ title, requirements });
+        }
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excalidrawAPI, sessionId]);
 
   const clearContextButtons = () => {
     contextButtonParentIdRef.current = null;
@@ -884,6 +1106,7 @@ export const CKAgentPanel = ({
           arrowId: recoveredArrowIds[0] || null,
           extraArrowIds: recoveredArrowIds.slice(1),
           sequence: 0,
+          createdAt: new Date().toISOString(),
         } as CKCanvasNode;
       })
       .filter((node): node is CKCanvasNode => !!node)
@@ -1019,6 +1242,23 @@ export const CKAgentPanel = ({
           }
         }
       }
+
+      // Debounced save on canvas changes (e.g. element drag) — captures updated positions
+      if (sessionId && nodesRef.current.length > 0) {
+        if (canvasSaveTimeoutRef.current) clearTimeout(canvasSaveTimeoutRef.current);
+        canvasSaveTimeoutRef.current = setTimeout(async () => {
+          // Sync node positions from live canvas without mutating nodesRef (avoid races)
+          const syncedNodes = syncNodeGeometryFromCanvas(nodesRef.current);
+          const sceneElements = Array.from(excalidrawAPI.getSceneElements());
+          const ckState = { ...serializeCKState(), nodes: syncedNodes };
+          const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
+          try {
+            await saveBoard(sessionId, sceneElements as unknown[], ckState as unknown, { scrollX, scrollY, zoom });
+          } catch {
+            // silent — position save is best-effort
+          }
+        }, 3000);
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [excalidrawAPI]);
@@ -1047,6 +1287,25 @@ export const CKAgentPanel = ({
     renderContextButtons(selectedNode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNodeId, nodes, excalidrawAPI]);
+
+  useEffect(() => {
+    const hideEditPanel = !!selectedNodeId;
+    document.documentElement.classList.toggle(
+      "ck-hide-node-edit-panel",
+      hideEditPanel,
+    );
+
+    if (hideEditPanel && excalidrawAPI) {
+      excalidrawAPI.updateScene({
+        appState: { openSidebar: null },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
+
+    return () => {
+      document.documentElement.classList.remove("ck-hide-node-edit-panel");
+    };
+  }, [selectedNodeId, excalidrawAPI]);
 
   useEffect(() => {
     if (!excalidrawAPI) {
@@ -1398,6 +1657,7 @@ export const CKAgentPanel = ({
       ids.add(`${node.elementId}-title`);
       ids.add(`${node.elementId}-desc`);
       ids.add(`${node.elementId}-badge`);
+      ids.add(`${node.elementId}-vstatus`);
       if (node.arrowId) {
         ids.add(node.arrowId);
       }
@@ -1517,6 +1777,7 @@ export const CKAgentPanel = ({
         node.status,
         node.id,
         node.generated,
+        node.validationStatus,
       );
       const groupId = `${node.elementId}-g`;
       const textWidth = node.width - 2 * NODE_TEXT_PADDING;
@@ -1580,6 +1841,21 @@ export const CKAgentPanel = ({
         groupIds: [groupId],
       } as ExcalidrawElementSkeleton);
 
+      // Validation status icon — top-right corner, concepts only, not C0
+      if (node.type === "concept" && node.id !== "C0" && node.validationStatus) {
+        skeleton.push({
+          id: `${node.elementId}-vstatus`,
+          type: "text",
+          x: node.x + node.width - NODE_TEXT_PADDING - BADGE_RIGHT_OFFSET - VSTATUS_FONT_SIZE - 4,
+          y: node.y + NODE_TEXT_PADDING,
+          text: VSTATUS_ICONS[node.validationStatus],
+          fontSize: VSTATUS_FONT_SIZE,
+          fontFamily: FONT_FAMILY["Liberation Sans"],
+          strokeColor: VSTATUS_COLORS[node.validationStatus],
+          groupIds: [groupId],
+        } as ExcalidrawElementSkeleton);
+      }
+
       const sourceParentIds = node.sourceParentIds.length
         ? node.sourceParentIds
         : node.parentId
@@ -1639,13 +1915,20 @@ export const CKAgentPanel = ({
     const generated = convertToExcalidrawElements(skeleton, {
       regenerateIds: false,
     });
+
+    const BG_IDS = new Set([CONCEPT_COLUMN_BG_ID, KNOWLEDGE_COLUMN_BG_ID]);
     const hasLegacyDivider = liveElementById.has(LEGACY_COLUMN_DIVIDER_ID);
-    const baseElements = currentElements.map((element) => {
-      if (element.id === LEGACY_COLUMN_DIVIDER_ID && hasLegacyDivider) {
-        return newElementWith(element, { isDeleted: true });
-      }
-      if (element.id === CONCEPT_COLUMN_BG_ID && !element.isDeleted) {
-        return newElementWith(element, {
+
+    // Build updated non-bg, non-deleted elements from the current scene.
+    // We drop deleted elements to prevent unbounded accumulation across redraws.
+    const baseOther: (typeof currentElements)[number][] = [];
+    let liveConceptBg: (typeof currentElements)[number] | null = null;
+    let liveKnowledgeBg: (typeof currentElements)[number] | null = null;
+    for (const element of currentElements) {
+      if (element.isDeleted) continue;
+      if (element.id === LEGACY_COLUMN_DIVIDER_ID && hasLegacyDivider) continue;
+      if (element.id === CONCEPT_COLUMN_BG_ID) {
+        liveConceptBg = newElementWith(element, {
           x: -COLUMN_BG_EXTENT_X,
           y: COLUMN_BG_Y,
           width: DIVIDER_X + COLUMN_BG_EXTENT_X,
@@ -1656,9 +1939,10 @@ export const CKAgentPanel = ({
           strokeWidth: 0,
           locked: true,
         });
+        continue;
       }
-      if (element.id === KNOWLEDGE_COLUMN_BG_ID && !element.isDeleted) {
-        return newElementWith(element, {
+      if (element.id === KNOWLEDGE_COLUMN_BG_ID) {
+        liveKnowledgeBg = newElementWith(element, {
           x: DIVIDER_X,
           y: COLUMN_BG_Y,
           width: COLUMN_BG_EXTENT_X,
@@ -1669,11 +1953,22 @@ export const CKAgentPanel = ({
           strokeWidth: 0,
           locked: true,
         });
+        continue;
       }
-      return element;
-    });
+      baseOther.push(element);
+    }
+
+    // Freshly-created bg elements from skeleton (when bgs didn't exist yet)
+    const generatedBgs = generated.filter((el) => BG_IDS.has(el.id));
+    const generatedNodes = generated.filter((el) => !BG_IDS.has(el.id));
+
+    // Column bgs always go first so they render behind everything else.
+    const finalBgs = generatedBgs.length > 0
+      ? generatedBgs
+      : [liveConceptBg, liveKnowledgeBg].filter(Boolean) as typeof generated;
+
     excalidrawAPI.updateScene({
-      elements: [...baseElements, ...generated],
+      elements: [...finalBgs, ...baseOther, ...generatedNodes],
     });
     if (options?.shouldScroll !== false) {
       excalidrawAPI.scrollToContent(generated, { animate: true });
@@ -1844,6 +2139,7 @@ export const CKAgentPanel = ({
         extraArrowIds: [],
         sourceParentIds: normalizedSourceParentIds,
         sequence: sequenceRef.current++,
+        createdAt: new Date().toISOString(),
       };
     });
 
@@ -1949,6 +2245,7 @@ export const CKAgentPanel = ({
         extraArrowIds: [],
         sourceParentIds: normalizedSourceParentIds,
         sequence: sequenceRef.current++,
+        createdAt: new Date().toISOString(),
       };
     });
 
@@ -2111,6 +2408,8 @@ export const CKAgentPanel = ({
       extraArrowIds: arrowIds.slice(1),
       sourceParentIds: defaultSourceParentIds,
       sequence: sequenceRef.current++,
+      createdAt: new Date().toISOString(),
+      ...(type === "concept" && { validationStatus: "undecided" as ValidationStatus }),
     };
   };
 
@@ -2152,6 +2451,18 @@ export const CKAgentPanel = ({
       return;
     }
 
+    if (sameSeed && !prevNodes.length) {
+      // Same concept but no tracked nodes. If the canvas already has visible node
+      // elements (e.g. restored from DB with corrupted empty ck_nodes), don't wipe
+      // them. If the canvas is truly empty, fall through to seed C0.
+      const hasCanvasNodes = !!excalidrawAPI?.getSceneElements().some(
+        (el) => NODE_ELEMENT_ID_PATTERN.test(el.id),
+      );
+      if (hasCanvasNodes) {
+        return;
+      }
+    }
+
     const prevInitialNodes = syncNodeGeometryFromCanvas(prevNodes).filter(
       (node) => !node.generated,
     );
@@ -2167,7 +2478,7 @@ export const CKAgentPanel = ({
 
     const rootTitle = concept?.title || "(initial concept)";
     const rootRequirements =
-      concept?.requirements || "No explicit requirements provided.";
+      concept?.requirements || "";
 
     const rootNode: CKCanvasNode = {
       id: "C0",
@@ -2192,6 +2503,8 @@ export const CKAgentPanel = ({
       extraArrowIds: [],
       sourceParentIds: [],
       sequence: sequenceRef.current++,
+      createdAt: new Date().toISOString(),
+      validationStatus: "undecided" as ValidationStatus,
     };
 
     const nextNodes = [rootNode];
@@ -2222,7 +2535,7 @@ export const CKAgentPanel = ({
 
     const title = initialConceptTitle.trim();
     if (!title) {
-      toast("Enter an initial concept title before confirming.");
+      toast("Enter an initial concept before confirming.");
       return;
     }
 
@@ -2233,7 +2546,7 @@ export const CKAgentPanel = ({
     });
     setLatestDecision("Initial concept confirmed.");
     setLatestRationale(
-      requirements || "No explicit requirements were provided.",
+      requirements || "",
     );
   };
 
@@ -2449,17 +2762,15 @@ export const CKAgentPanel = ({
       }
 
       if (result.validationDecision) {
+        const { conceptId, isValid, rationale } = result.validationDecision;
         setLatestDecision(
-          result.validationDecision.isValid
-            ? `${result.validationDecision.conceptId} is supported by the current knowledge.`
-            : `${result.validationDecision.conceptId} is not supported by the current knowledge.`,
+          isValid
+            ? `${conceptId} is supported by the current knowledge.`
+            : `${conceptId} is not supported by the current knowledge.`,
         );
-        setLatestRationale(result.validationDecision.rationale);
-        selectNodeOnCanvas(result.validationDecision.conceptId);
-        markValidationOnCanvas(
-          result.validationDecision.conceptId,
-          result.validationDecision.isValid,
-        );
+        setLatestRationale(rationale);
+        selectNodeOnCanvas(conceptId);
+        setConceptValidationStatus(conceptId, isValid ? "approved" : "rejected");
       }
 
       if (result.noveltyDecision) {
@@ -2568,6 +2879,7 @@ export const CKAgentPanel = ({
       updated.status,
       updated.id,
       updated.generated,
+      updated.validationStatus,
     );
     const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
     const nextElements = currentElements.map((element) =>
@@ -2674,6 +2986,7 @@ export const CKAgentPanel = ({
         arrowId,
         extraArrowIds,
         sequence: sequenceRef.current++,
+        createdAt: new Date().toISOString(),
       };
       const nextNodes = [...nodesRef.current, newNode];
       setNodes(nextNodes);
@@ -2752,6 +3065,8 @@ export const CKAgentPanel = ({
         arrowId,
         extraArrowIds: [],
         sequence: sequenceRef.current++,
+        createdAt: new Date().toISOString(),
+        validationStatus: "undecided" as ValidationStatus,
       };
 
       const nextNodes = [...nodesRef.current, newNode];
@@ -2772,6 +3087,77 @@ export const CKAgentPanel = ({
     } finally {
       setPlacingConcept(false);
     }
+  };
+
+  const setConceptValidationStatus = (nodeId: string, status: ValidationStatus) => {
+    if (!excalidrawAPI) return;
+    const updated = nodesRef.current.map((n) =>
+      n.id === nodeId && n.type === "concept" ? { ...n, validationStatus: status } : n,
+    );
+    setNodes(updated);
+    nodesRef.current = updated;
+    const node = updated.find((n) => n.id === nodeId);
+    if (!node || node.id === "C0") return;
+
+    const colors = VALIDATION_COLORS[status];
+    const vstatusId = `${node.elementId}-vstatus`;
+    const groupId = `${node.elementId}-g`;
+    const currentElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+
+    // Update card border/background
+    const updatedElements = currentElements.map((el) =>
+      el.id === node.elementId
+        ? newElementWith(el, { strokeColor: colors.strokeColor, backgroundColor: colors.backgroundColor })
+        : el,
+    );
+
+    // Upsert vstatus icon text element
+    const existingVstatus = updatedElements.find((el) => el.id === vstatusId && !el.isDeleted);
+    const iconX = node.x + node.width - NODE_TEXT_PADDING - BADGE_RIGHT_OFFSET - VSTATUS_FONT_SIZE - 4;
+    const iconY = node.y + NODE_TEXT_PADDING;
+
+    const finalElements = existingVstatus
+      ? updatedElements.map((el) =>
+          el.id === vstatusId
+            ? newElementWith(el, { strokeColor: VSTATUS_COLORS[status], text: VSTATUS_ICONS[status] } as Partial<typeof el>)
+            : el,
+        )
+      : [
+          ...updatedElements,
+          ...convertToExcalidrawElements([{
+            id: vstatusId,
+            type: "text",
+            x: iconX,
+            y: iconY,
+            text: VSTATUS_ICONS[status],
+            fontSize: VSTATUS_FONT_SIZE,
+            fontFamily: FONT_FAMILY["Liberation Sans"],
+            strokeColor: VSTATUS_COLORS[status],
+            groupIds: [groupId],
+          } as ExcalidrawElementSkeleton], { regenerateIds: false }),
+        ];
+
+    excalidrawAPI.updateScene({ elements: finalElements, captureUpdate: CaptureUpdateAction.NEVER });
+  };
+
+  const handlePush = async () => {
+    if (!sessionId || !excalidrawAPI) return;
+    setIsPushing(true);
+    setPushFeedback(null);
+    try {
+      const elements = Array.from(excalidrawAPI.getSceneElements());
+      const ckState = serializeCKState();
+      await pushBoard(sessionId, elements as unknown[], ckState as unknown, {});
+      setPushFeedback({ ok: true, msg: "Board pushed successfully." });
+    } catch (err) {
+      setPushFeedback({ ok: false, msg: err instanceof Error ? err.message : "Push failed." });
+    } finally {
+      setIsPushing(false);
+    }
+  };
+
+  const handleMerge = () => {
+    window.dispatchEvent(new CustomEvent("ck-merge-requested", { detail: { sessionId } }));
   };
 
   const getOperationDisabledReason = (operation: CKOperation) => {
@@ -2797,318 +3183,409 @@ export const CKAgentPanel = ({
 
   return (
     <div className="ck-agent-panel">
-      <div className="ck-agent-section ck-agent-section--hero">
-        <div className="ck-agent-header">
-          <div>
-            <div className="ck-agent-title">C-K Agents Design Workspace</div>
-          </div>
-        </div>
-        <div className="ck-agent-hero-copy">
-          Start with one concept and supporting knowledge, then use
-          the action cards to expand, validate, and refine the map.
-        </div>
-        <label className="ck-toggle-row" htmlFor="ck-toggle-line-of-thought">
-          <input
-            id="ck-toggle-line-of-thought"
-            type="checkbox"
-            checked={showLineOfThoughtArrows}
-            onChange={(event) =>
-              setShowLineOfThoughtArrows(event.target.checked)
-            }
-          />
-          <span>Show C&lt;-&gt;K line-of-thought arrows</span>
-        </label>
-        <label className="ck-toggle-row" htmlFor="ck-toggle-descriptions">
-          <input
-            id="ck-toggle-descriptions"
-            type="checkbox"
-            checked={showNodeDescriptions}
-            onChange={(event) =>
-              setShowNodeDescriptions(event.target.checked)
-            }
-          />
-          <span>Show node descriptions</span>
-        </label>
-        <div className="ck-summary-grid">
-          <div className="ck-summary-card">
-            <div className="ck-summary-value">{conceptCount}</div>
-            <div className="ck-summary-label">Concepts</div>
-          </div>
-          <div className="ck-summary-card">
-            <div className="ck-summary-value">{knowledgeCount}</div>
-            <div className="ck-summary-label">Knowledge</div>
-          </div>
-          <div className="ck-summary-card">
-            <div className="ck-summary-value">{generatedCount}</div>
-            <div className="ck-summary-label">Suggestions</div>
-          </div>
-        </div>
-        <label htmlFor="ck-initial-concept-title" className="ck-agent-label">
-          Initial concept title
-        </label>
-        <input
-          id="ck-initial-concept-title"
-          className="ck-agent-input"
-          value={initialConceptTitle}
-          placeholder="Enter initial concept title..."
-          onChange={(event) => setInitialConceptTitle(event.target.value)}
-          disabled={confirmedInitialConcept !== null}
-        />
-        <label
-          htmlFor="ck-initial-concept-requirements"
-          className="ck-agent-label"
-        >
-          Initial concept requirements
-        </label>
-        <textarea
-          id="ck-initial-concept-requirements"
-          className="ck-agent-input"
-          value={initialConceptRequirements}
-          placeholder="Enter requirements/constraints (optional)..."
-          onChange={(event) => setInitialConceptRequirements(event.target.value)}
-          rows={3}
-          disabled={confirmedInitialConcept !== null}
-        />
-        <button
-          className="ck-small-button ck-small-button--primary"
-          type="button"
-          onClick={confirmInitialConcept}
-          disabled={confirmedInitialConcept !== null || !initialConceptTitle.trim()}
-        >
-          {confirmedInitialConcept ? "Initial concept locked" : "Confirm initial concept"}
-        </button>
-
-        <label htmlFor="ck-new-concept-title" className="ck-agent-label">
-          Add concept
-        </label>
-        <input
-          id="ck-new-concept-title"
-          className="ck-agent-input"
-          value={newConceptTitle}
-          placeholder="Concept title..."
-          onChange={(e) => setNewConceptTitle(e.target.value)}
-          disabled={confirmedInitialConcept === null}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              confirmNewConcept();
-            }
-          }}
-        />
-        <textarea
-          className="ck-agent-input"
-          value={newConceptDesc}
-          placeholder="Description (optional)..."
-          onChange={(e) => setNewConceptDesc(e.target.value)}
-          rows={2}
-          disabled={confirmedInitialConcept === null}
-        />
-        <button
-          className="ck-small-button ck-small-button--primary"
-          type="button"
-          onClick={confirmNewConcept}
-          disabled={
-            !newConceptTitle.trim() ||
-            placingConcept ||
-            confirmedInitialConcept === null
-          }
-          aria-busy={placingConcept}
-        >
-          {placingConcept ? "Placing..." : "Add concept to board"}
-        </button>
-
-        <label htmlFor="ck-new-knowledge-title" className="ck-agent-label">
-          Add knowledge
-        </label>
-        <input
-          id="ck-new-knowledge-title"
-          className="ck-agent-input"
-          value={newKnowledgeTitle}
-          placeholder="Knowledge title..."
-          onChange={(e) => setNewKnowledgeTitle(e.target.value)}
-          disabled={confirmedInitialConcept === null}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              confirmNewKnowledge();
-            }
-          }}
-        />
-        <textarea
-          className="ck-agent-input"
-          value={newKnowledgeDesc}
-          placeholder="Description (optional)..."
-          onChange={(e) => setNewKnowledgeDesc(e.target.value)}
-          rows={2}
-          disabled={confirmedInitialConcept === null}
-        />
-        <button
-          className="ck-small-button ck-small-button--primary"
-          type="button"
-          onClick={confirmNewKnowledge}
-          disabled={
-            !newKnowledgeTitle.trim() ||
-            placingKnowledge ||
-            confirmedInitialConcept === null
-          }
-          aria-busy={placingKnowledge}
-        >
-          {placingKnowledge ? "Placing..." : "Add to board"}
-        </button>
-      </div>
-
-      <div className="ck-agent-section">
-        <div className="ck-section-header">
-          <div>
-            <div className="ck-agent-subtitle">Actions</div>
-          </div>
-          <div className={`ck-status-pill ${selectedNode ? "is-active" : ""}`}>
-            {selectedNode
-              ? `${formatNodeTypeLabel(selectedNode.type)} ${selectedNode.id}`
-              : "No selection"}
-          </div>
-        </div>
-        <div className="ck-hint-text">
-          {selectedNode
-            ? `${formatNodeTypeLabel(selectedNode.type)} ${selectedNode.id} is active. ${
-                selectedNode.generated
-                  ? "This is a generated suggestion."
-                  : "This is part of the starting map."
-              }`
-            : "Select a single concept or knowledge node on the canvas to unlock type-specific actions."}
-        </div>
-        {hasPendingLayout ? (
-          <div className="ck-inline-banner is-warning">
-            A new layout is ready. Apply layout to sync the canvas before
-            running more actions.
-          </div>
-        ) : null}
-        {ACTION_GROUPS.map((group) => (
-          <div key={group.label} className="ck-action-group">
-            <div className="ck-action-group__label">{group.label}</div>
-            <div className="ck-actions-grid">
-              {group.operations.map((operation) => {
-                const disabledReason = getOperationDisabledReason(operation);
-                const requiredFocusType = getRequiredFocusType(operation);
-                const isBusy = busyOperation === operation;
-                const isMatched =
-                  requiredFocusType !== null &&
-                  selectedNode?.type === requiredFocusType;
-                const theme = OPERATION_THEME[operation];
-
-                return (
-                  <button
-                    key={operation}
-                    type="button"
-                    className={[
-                      "ck-action-button",
-                      `ck-action-button--${theme}`,
-                      isBusy ? "is-busy" : "",
-                      isMatched ? "is-matched" : "",
-                      disabledReason ? "is-disabled" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    disabled={disabledReason !== null}
-                    onClick={() => runOperation(operation)}
-                    aria-busy={isBusy}
-                    title={disabledReason || OPERATION_DESCRIPTIONS[operation]}
-                  >
-                    <span className="ck-action-button__top">
-                      <span className="ck-action-button__label">
-                        {isBusy
-                          ? `Running: ${OPERATION_LABELS[operation]}...`
-                          : OPERATION_LABELS[operation]}
-                      </span>
-                    </span>
-                    <span className="ck-action-button__desc">
-                      {OPERATION_DESCRIPTIONS[operation]}
-                    </span>
-                    {disabledReason ? (
-                      <span className="ck-action-button__meta">
-                        {disabledReason}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
+      <div className="ck-agent-panel__split">
+        <div className="ck-agent-pane ck-agent-pane--manual">
+          <div className="ck-agent-section ck-agent-section--hero">
+            <div className="ck-agent-header">
+              <div>
+                <div className="ck-agent-title">C-K Workspace</div>
+              </div>
+              <button
+                type="button"
+                className="ck-back-boards-btn"
+                onClick={() => window.dispatchEvent(new CustomEvent("ck-back-to-boards"))}
+                title="Back to my boards"
+              >
+                ← My boards
+              </button>
             </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="ck-agent-section">
-        <div className="ck-section-header">
-          <div>
-            <div className="ck-agent-subtitle">Decision</div>
-            <div className="ck-section-caption">
-              Review the latest agent output before accepting or rejecting it.
+            <div className="ck-agent-hero-copy">
+              Set up the initial concept, tune visibility controls, and curate
+              the map content directly from this side.
             </div>
-          </div>
-          <div
-            className={`ck-status-pill ${
-              hasPendingLayout || latestDecision ? "is-active" : ""
-            }`}
-          >
-            {hasPendingLayout
-              ? "Layout pending"
-              : latestDecision
-              ? "Updated"
-              : "Waiting"}
-          </div>
-        </div>
-        <div className="ck-decision-box">
-          <div className="ck-decision-summary">
-            {latestDecision || "Run an operation to see agent decisions."}
-          </div>
-          {latestRationale ? (
-            <div className="ck-decision-rationale">{latestRationale}</div>
-          ) : null}
-        </div>
-        <div className="ck-accept-reject-row">
-          <button
-            type="button"
-            className="ck-small-button ck-small-button--primary"
-            onClick={applyPendingLayout}
-            disabled={!hasPendingLayout}
-          >
-            Apply layout
-          </button>
-          <button
-            type="button"
-            className="ck-small-button ck-small-button--success"
-            onClick={acceptSelectedNode}
-            disabled={!selectedNode?.generated || hasPendingLayout}
-          >
-            Accept selected
-          </button>
-          <button
-            type="button"
-            className="ck-small-button ck-small-button--danger"
-            onClick={rejectSelectedNode}
-            disabled={!selectedNode?.generated || hasPendingLayout}
-          >
-            Reject selected
-          </button>
-        </div>
-      </div>
-
-      <div className="ck-agent-section">
-        <div className="ck-agent-subtitle">Nodes</div>
-        <div className="ck-node-list">
-          {nodes.map((node) => (
-            <button
-              key={node.id}
-              type="button"
-              className={`ck-node-item ${
-                selectedNodeId === node.id ? "is-selected" : ""
-              }`}
-              onClick={() => selectNodeOnCanvas(node.id)}
+            <label className="ck-toggle-row" htmlFor="ck-toggle-line-of-thought">
+              <input
+                id="ck-toggle-line-of-thought"
+                type="checkbox"
+                checked={showLineOfThoughtArrows}
+                onChange={(event) =>
+                  setShowLineOfThoughtArrows(event.target.checked)
+                }
+              />
+              <span>Show line-of-thought arrows</span>
+            </label>
+            <label className="ck-toggle-row" htmlFor="ck-toggle-descriptions">
+              <input
+                id="ck-toggle-descriptions"
+                type="checkbox"
+                checked={showNodeDescriptions}
+                onChange={(event) =>
+                  setShowNodeDescriptions(event.target.checked)
+                }
+              />
+              <span>Show node descriptions</span>
+            </label>
+            <div className="ck-summary-grid">
+              <div className="ck-summary-card">
+                <div className="ck-summary-value">{conceptCount}</div>
+                <div className="ck-summary-label">Concepts</div>
+              </div>
+              <div className="ck-summary-card">
+                <div className="ck-summary-value">{knowledgeCount}</div>
+                <div className="ck-summary-label">Knowledge</div>
+              </div>
+              <div className="ck-summary-card">
+                <div className="ck-summary-value">{generatedCount}</div>
+                <div className="ck-summary-label">Suggestions</div>
+              </div>
+            </div>
+            <label htmlFor="ck-initial-concept-title" className="ck-agent-label">
+              Initial concept
+            </label>
+            <input
+              id="ck-initial-concept-title"
+              className="ck-agent-input"
+              value={initialConceptTitle}
+              placeholder="Enter initial concept..."
+              onChange={(event) => setInitialConceptTitle(event.target.value)}
+              disabled={confirmedInitialConcept !== null}
+            />
+            <label
+              htmlFor="ck-initial-concept-requirements"
+              className="ck-agent-label"
             >
-              <span>{node.id}</span>
-              <span>{node.title}</span>
+              Initial concept requirements
+            </label>
+            <textarea
+              id="ck-initial-concept-requirements"
+              className="ck-agent-input"
+              value={initialConceptRequirements}
+              placeholder="Enter requirements/constraints (optional)..."
+              onChange={(event) => setInitialConceptRequirements(event.target.value)}
+              rows={3}
+              disabled={confirmedInitialConcept !== null}
+            />
+            <button
+              className="ck-small-button ck-small-button--primary"
+              type="button"
+              onClick={confirmInitialConcept}
+              disabled={confirmedInitialConcept !== null || !initialConceptTitle.trim()}
+            >
+              {confirmedInitialConcept ? "Initial concept locked" : "Confirm initial concept"}
             </button>
-          ))}
+
+            <label htmlFor="ck-new-concept-title" className="ck-agent-label">
+              Add concept
+            </label>
+            <input
+              id="ck-new-concept-title"
+              className="ck-agent-input"
+              value={newConceptTitle}
+              placeholder="Concept..."
+              onChange={(e) => setNewConceptTitle(e.target.value)}
+              disabled={confirmedInitialConcept === null}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  confirmNewConcept();
+                }
+              }}
+            />
+            <textarea
+              className="ck-agent-input"
+              value={newConceptDesc}
+              placeholder="Description (optional)..."
+              onChange={(e) => setNewConceptDesc(e.target.value)}
+              rows={2}
+              disabled={confirmedInitialConcept === null}
+            />
+            <button
+              className="ck-small-button ck-small-button--primary"
+              type="button"
+              onClick={confirmNewConcept}
+              disabled={
+                !newConceptTitle.trim() ||
+                placingConcept ||
+                confirmedInitialConcept === null
+              }
+              aria-busy={placingConcept}
+            >
+              {placingConcept ? "Placing..." : "Add concept to board"}
+            </button>
+
+            <label htmlFor="ck-new-knowledge-title" className="ck-agent-label">
+              Add knowledge
+            </label>
+            <input
+              id="ck-new-knowledge-title"
+              className="ck-agent-input"
+              value={newKnowledgeTitle}
+              placeholder="Knowledge..."
+              onChange={(e) => setNewKnowledgeTitle(e.target.value)}
+              disabled={confirmedInitialConcept === null}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  confirmNewKnowledge();
+                }
+              }}
+            />
+            <textarea
+              className="ck-agent-input"
+              value={newKnowledgeDesc}
+              placeholder="Description (optional)..."
+              onChange={(e) => setNewKnowledgeDesc(e.target.value)}
+              rows={2}
+              disabled={confirmedInitialConcept === null}
+            />
+            <button
+              className="ck-small-button ck-small-button--primary"
+              type="button"
+              onClick={confirmNewKnowledge}
+              disabled={
+                !newKnowledgeTitle.trim() ||
+                placingKnowledge ||
+                confirmedInitialConcept === null
+              }
+              aria-busy={placingKnowledge}
+            >
+              {placingKnowledge ? "Placing..." : "Add to board"}
+            </button>
+          </div>
+{/* 
+          <div className="ck-agent-section">
+            <div className="ck-section-header">
+              <div>
+                <div className="ck-agent-subtitle">Workspace Overview</div>
+              </div>
+              <div className="ck-status-pill is-active">Node list</div>
+            </div>
+            <div className="ck-node-list">
+              {nodes.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  className={`ck-node-item ${
+                    selectedNodeId === node.id ? "is-selected" : ""
+                  }`}
+                  onClick={() => selectNodeOnCanvas(node.id)}
+                >
+                  <span>{node.id}</span>
+                  <span>{node.title}</span>
+                  {node.type === "concept" && node.id !== "C0" && node.validationStatus && (
+                    <span className={`ck-node-vstatus ck-node-vstatus--${node.validationStatus}`}>
+                      {VSTATUS_ICONS[node.validationStatus]}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div> */}
+
+          {sessionId && (
+            <div className="ck-agent-section ck-collab-section">
+              <div className="ck-agent-subtitle">Collaboration</div>
+              <div className="ck-collab-buttons">
+                <button
+                  type="button"
+                  className="ck-collab-btn ck-collab-btn--push"
+                  onClick={handlePush}
+                  disabled={isPushing || !nodes.length}
+                  aria-busy={isPushing}
+                >
+                  {isPushing ? "Pushing…" : "⬆ Push"}
+                </button>
+                <button
+                  type="button"
+                  className="ck-collab-btn ck-collab-btn--merge"
+                  onClick={handleMerge}
+                  disabled={!nodes.length}
+                >
+                  ⇌ Merge
+                </button>
+              </div>
+              {pushFeedback && (
+                <div className={`ck-collab-feedback ${pushFeedback.ok ? "is-ok" : "is-err"}`}>
+                  {pushFeedback.msg}
+                </div>
+              )}
+              {/* <button
+                type="button"
+                className="ck-collab-btn ck-collab-btn--back"
+                onClick={() => window.dispatchEvent(new CustomEvent("ck-back-to-boards"))}
+              >
+                ← My boards
+              </button> */}
+            </div>
+          )}
+        </div>
+
+        <div className="ck-agent-pane ck-agent-pane--decisions">
+          <div className="ck-agent-section">
+            <div className="ck-section-header">
+              <div>
+                <div className="ck-agent-title">C-K Agents</div>
+                <div className="ck-section-caption">
+                  Have agents assist with expanding concepts, generating knowledge, restructuring, and validation.
+                </div>
+              </div>
+              {/* <div className="ck-status-pill is-active">Right panel</div> */}
+            </div>
+
+            <div className="ck-section-header">
+              <div>
+                <div className="ck-agent-subtitle">Actions</div>
+              </div>
+              <div className={`ck-status-pill ${selectedNode ? "is-active" : ""}`}>
+                {selectedNode
+                  ? `${formatNodeTypeLabel(selectedNode.type)} ${selectedNode.id}`
+                  : "No selection"}
+              </div>
+            </div>
+            <div className="ck-hint-text">
+              {selectedNode
+                ? `${formatNodeTypeLabel(selectedNode.type)} ${selectedNode.id} is active. ${
+                    // selectedNode.generated
+                    //   ? "This is a generated suggestion."
+                    //   : "This is part of the starting map." 
+                    " "
+                  }`
+                : "Select a single concept or knowledge node on the canvas to unlock type-specific actions."}
+            </div>
+            {selectedNode?.type === "concept" && selectedNode.id !== "C0" && (
+              <div className="ck-validation-row">
+                <span className="ck-validation-label">Validation</span>
+                <div className="ck-validation-pills">
+                  {(["undecided", "approved", "rejected"] as ValidationStatus[]).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`ck-validation-pill ck-validation-pill--${s} ${
+                        (selectedNode.validationStatus ?? "undecided") === s ? "is-active" : ""
+                      }`}
+                      onClick={() => setConceptValidationStatus(selectedNode.id, s)}
+                    >
+                      {s === "approved" ? "approved" : s === "rejected" ? "rejected" : "undecided"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {hasPendingLayout ? (
+              <div className="ck-inline-banner is-warning">
+                A new layout is ready. Apply layout to sync the canvas before
+                running more actions.
+              </div>
+            ) : null}
+            {ACTION_GROUPS.map((group) => (
+              <div key={group.label} className="ck-action-group">
+                <div className="ck-action-group__label">{group.label}</div>
+                <div className="ck-actions-grid">
+                  {group.operations.map((operation) => {
+                    const disabledReason = getOperationDisabledReason(operation);
+                    const requiredFocusType = getRequiredFocusType(operation);
+                    const isBusy = busyOperation === operation;
+                    const isMatched =
+                      requiredFocusType !== null &&
+                      selectedNode?.type === requiredFocusType;
+                    const theme = OPERATION_THEME[operation];
+
+                    return (
+                      <button
+                        key={operation}
+                        type="button"
+                        className={[
+                          "ck-action-button",
+                          `ck-action-button--${theme}`,
+                          isBusy ? "is-busy" : "",
+                          isMatched ? "is-matched" : "",
+                          disabledReason ? "is-disabled" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                        disabled={disabledReason !== null}
+                        onClick={() => runOperation(operation)}
+                        aria-busy={isBusy}
+                        title={disabledReason || OPERATION_DESCRIPTIONS[operation]}
+                      >
+                        <span className="ck-action-button__top">
+                          <span className="ck-action-button__label">
+                            {isBusy
+                              ? `Running: ${OPERATION_LABELS[operation]}...`
+                              : OPERATION_LABELS[operation]}
+                          </span>
+                        </span>
+                        <span className="ck-action-button__desc">
+                          {OPERATION_DESCRIPTIONS[operation]}
+                        </span>
+                        {disabledReason ? (
+                          <span className="ck-action-button__meta">
+                            {disabledReason}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="ck-agent-section">
+            <div className="ck-section-header">
+              <div>
+                <div className="ck-agent-subtitle">Decision</div>
+                <div className="ck-section-caption">
+                  Review the latest agent output before accepting or rejecting it.
+                </div>
+              </div>
+              <div
+                className={`ck-status-pill ${
+                  hasPendingLayout || latestDecision ? "is-active" : ""
+                }`}
+              >
+                {hasPendingLayout
+                  ? "Layout pending"
+                  : latestDecision
+                  ? "Updated"
+                  : "Waiting"}
+              </div>
+            </div>
+            <div className="ck-decision-box">
+              <div className="ck-decision-summary">
+                {latestDecision || "Run an operation to see agent decisions."}
+              </div>
+              {latestRationale ? (
+                <div className="ck-decision-rationale">{latestRationale}</div>
+              ) : null}
+            </div>
+            <div className="ck-accept-reject-row">
+              <button
+                type="button"
+                className="ck-small-button ck-small-button--primary"
+                onClick={applyPendingLayout}
+                disabled={!hasPendingLayout}
+              >
+                Apply layout
+              </button>
+              <button
+                type="button"
+                className="ck-small-button ck-small-button--success"
+                onClick={acceptSelectedNode}
+                disabled={!selectedNode?.generated || hasPendingLayout}
+              >
+                Accept selected
+              </button>
+              <button
+                type="button"
+                className="ck-small-button ck-small-button--danger"
+                onClick={rejectSelectedNode}
+                disabled={!selectedNode?.generated || hasPendingLayout}
+              >
+                Reject selected
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -25,6 +25,7 @@ export interface CKEntryContext {
   operationRationale: string;
   parentId: string | null;
   sourceParentIds?: string[];
+  validationStatus?: "undecided" | "approved" | "rejected";
 }
 
 export interface CKOperationInput {
@@ -139,6 +140,7 @@ const toBackendHistory = (history: CKEntryContext[]) =>
     operation_rationale: entry.operationRationale,
     parent_id: entry.parentId,
     source_parent_ids: entry.sourceParentIds || [],
+    ...(entry.validationStatus ? { validation_status: entry.validationStatus } : {}),
   }));
 
 const readResponseError = async (response: Response) => {

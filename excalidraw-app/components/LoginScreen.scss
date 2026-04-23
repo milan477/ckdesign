@@ -1,0 +1,220 @@
+.ck-login {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fffce8;
+  font-family: "Assistant", system-ui, sans-serif;
+  z-index: 9999;
+  overflow: hidden;
+
+  // Scattered background blobs mirroring Excalidraw canvas feel
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0.25;
+  }
+
+  &::before {
+    width: 520px;
+    height: 520px;
+    background: radial-gradient(circle, #ffd43b 0%, transparent 70%);
+    top: -160px;
+    left: -160px;
+  }
+
+  &::after {
+    width: 420px;
+    height: 420px;
+    background: radial-gradient(circle, #69db7c 0%, transparent 70%);
+    bottom: -120px;
+    right: -120px;
+  }
+
+  &__card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 400px;
+    padding: 2.5rem 2rem;
+    background: #ffffff;
+    border: 2px solid #ffd43b;
+    border-radius: 16px;
+    box-shadow:
+      0 4px 0 0 #fab005,
+      0 12px 40px rgba(240, 140, 0, 0.12),
+      0 2px 8px rgba(0, 0, 0, 0.06);
+  }
+
+  &__logo {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    margin-bottom: 0.25rem;
+
+    &-c {
+      font-size: 2rem;
+      font-weight: 800;
+      color: #f08c00;
+    }
+
+    &-k {
+      font-size: 2rem;
+      font-weight: 800;
+      color: #2f9e44;
+    }
+
+    &-word {
+      margin-left: 6px;
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #343a40;
+    }
+  }
+
+  &__tagline {
+    font-size: 0.8rem;
+    color: #868e96;
+    margin: 0 0 1.75rem;
+  }
+
+  &__tabs {
+    display: flex;
+    border-bottom: 2px solid #ffec99;
+    margin-bottom: 1.5rem;
+  }
+
+  &__tab {
+    flex: 1;
+    padding: 0.5rem;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    color: #868e96;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+
+    &--active {
+      color: #2f9e44;
+      border-bottom-color: #40c057;
+    }
+
+    &:hover:not(&--active) {
+      color: #495057;
+    }
+  }
+
+  &__form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #495057;
+    margin-top: 0.5rem;
+  }
+
+  &__optional {
+    font-weight: 400;
+    color: #adb5bd;
+  }
+
+  &__input {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    background: #f8f9fa;
+    border: 1.5px solid #ced4da;
+    border-radius: 8px;
+    color: #1e1e1e;
+    font-size: 0.9rem;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &::placeholder {
+      color: #adb5bd;
+    }
+
+    &:focus {
+      border-color: #4dabf7;
+      box-shadow: 0 0 0 3px rgba(77, 171, 247, 0.15);
+    }
+  }
+
+  &__password-row {
+    display: flex;
+    gap: 0.5rem;
+
+    .ck-login__input {
+      flex: 1;
+    }
+  }
+
+  &__show-btn {
+    padding: 0.6rem 0.75rem;
+    background: #f8f9fa;
+    border: 1.5px solid #ced4da;
+    border-radius: 8px;
+    color: #868e96;
+    font-size: 0.8rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+
+    &:hover {
+      color: #495057;
+      border-color: #adb5bd;
+    }
+  }
+
+  &__error {
+    margin: 0.25rem 0;
+    padding: 0.5rem 0.75rem;
+    background: rgba(250, 82, 82, 0.08);
+    border: 1px solid rgba(250, 82, 82, 0.3);
+    border-radius: 6px;
+    color: #e03131;
+    font-size: 0.82rem;
+  }
+
+  &__submit {
+    margin-top: 0.75rem;
+    padding: 0.7rem;
+    background: #ffd43b;
+    border: 2px solid #fab005;
+    border-radius: 8px;
+    color: #1e1e1e;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    box-shadow: 0 2px 0 0 #e67700;
+
+    &:hover:not(:disabled) {
+      background: #ffec99;
+      border-color: #ffd43b;
+      transform: translateY(-1px);
+    }
+
+    &:active:not(:disabled) {
+      transform: translateY(1px);
+      box-shadow: none;
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+  }
+}

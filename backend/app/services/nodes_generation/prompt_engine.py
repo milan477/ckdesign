@@ -620,3 +620,219 @@ Choose the single best parent concept ID for this new concept.
 Respond in exactly this format (no extra text):
 PARENT_ID: <concept ID, e.g. C3> or PARENT_ID: C0
 RATIONALE: <2-3 sentences explaining the placement decision>"""
+
+    # ─── Merge prompts ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def detect_knowledge_conflicts(
+        topic: str,
+        knowledge_a_json: str,
+        knowledge_b_json: str,
+        owner_a: str = "Designer A",
+        owner_b: str = "Designer B",
+    ) -> str:
+        """
+        Step 1 of the merge pipeline.
+        Compare both designers' K-spaces and surface all semantic conflicts.
+        Handles pairwise clashes AND combination-level incompatibilities.
+        """
+        return f"""### ROLE
+You are a C-K Theory merge expert. Two designers have independently developed knowledge spaces
+for the same initial concept. Your task is to detect every semantic conflict between them so
+the team can review and resolve them before the knowledge spaces are unified.
+
+### TOPIC
+{topic}
+
+### BACKGROUND — K-RELATIVITY
+In C-K Theory, knowledge is always relative to the designer's reference frame. Two propositions
+that appear compatible in isolation can clash when viewed in the same K-space, because each
+designer may have taken different background assumptions as given. Flag these as K-RELATIVITY
+conflicts even when neither statement is strictly false on its own.
+
+### CONFLICT TYPES
+Use exactly one of these labels per detected conflict:
+
+- CONTRADICTION   — one statement asserts P, the other asserts ¬P (direct logical clash).
+- K_RELATIVITY    — the same phenomenon is described from incompatible reference frames or
+                    with incompatible background assumptions; neither statement is wrong alone,
+                    but they cannot coexist in a shared K-space without clarification.
+- INCOMPATIBILITY — two or more statements are individually valid but cannot all be true
+                    simultaneously; their conjunction implies a falsehood or a design dead-end.
+- NEAR_DUPLICATE  — the same proposition stated twice in different wording; should be unified
+                    into a single canonical entry.
+
+### {owner_a.upper()}'S KNOWLEDGE SPACE
+{knowledge_a_json}
+
+### {owner_b.upper()}'S KNOWLEDGE SPACE
+{knowledge_b_json}
+
+### TASK
+1. Compare every node in {owner_a}'s space against every node in {owner_b}'s space.
+2. Also look for COMBINATION conflicts: groups of 2–3 nodes (from either or both spaces) whose
+   conjunction implies a falsehood or a design contradiction.
+3. For each conflict, record:
+   - the IDs involved (one or more from each side)
+   - the conflict type
+   - a single precise sentence explaining the clash, grounded in the actual content of the nodes
+   - which owner each set of IDs belongs to
+
+Return a JSON array. Each element must follow this exact shape:
+
+{{
+  "ids_a": ["K1"],
+  "ids_b": ["K3"],
+  "type": "CONTRADICTION",
+  "explanation": "K1 states that X is always true, but K3 states X is false under the same conditions.",
+  "owner_a": "{owner_a}",
+  "owner_b": "{owner_b}"
+}}
+
+For combination conflicts involving multiple nodes from the same side:
+{{
+  "ids_a": ["K2", "K4"],
+  "ids_b": ["K1"],
+  "type": "INCOMPATIBILITY",
+  "explanation": "K2 and K4 together imply Y must hold, but K1 rules out Y.",
+  "owner_a": "{owner_a}",
+  "owner_b": "{owner_b}"
+}}
+
+Rules:
+- If no conflicts exist, return [].
+- ids_a must contain only IDs from {owner_a}'s space.
+- ids_b must contain only IDs from {owner_b}'s space.
+- Do not invent IDs. Use only IDs provided above.
+- Do not include commentary, markdown, or text outside the JSON array.
+- Return only the JSON array."""
+
+    @staticmethod
+    def restructure_merged_knowledge(
+        topic: str,
+        all_knowledge_json: str,
+        resolved_conflicts_json: str,
+    ) -> str:
+        """
+        Step 3 of the merge pipeline.
+        After conflict resolutions are submitted, reorganize the combined K-space
+        into a single, coherent, logically structured knowledge graph.
+        """
+        return f"""### ROLE
+You are a C-K Theory structural expert. Two designers have merged their knowledge spaces for
+a shared design project. Conflict resolutions have been applied. Your task is to reorganize the
+combined knowledge into a single, coherent K-space that:
+  1. Eliminates redundancy (no duplicate propositions).
+  2. Preserves every retained piece of knowledge — do not delete information without a resolution.
+  3. Groups related entries hierarchically (parent–child where one generalizes the other).
+  4. Connects laterally related entries via source_parent_ids when they share a common basis.
+  5. Produces a report of every structural change made.
+
+### TOPIC
+{topic}
+
+### COMBINED KNOWLEDGE (after resolution)
+{all_knowledge_json}
+
+### APPLIED CONFLICT RESOLUTIONS
+{resolved_conflicts_json}
+
+### TASK
+Restructure the combined knowledge into an ordered list of knowledge nodes.
+
+Return valid JSON only in this exact shape:
+
+{{
+  "knowledge_entries": [
+    {{
+      "id": "K1",
+      "type": "knowledge",
+      "title": "...",
+      "desc": "...",
+      "parent_id": "C0",
+      "source_parent_ids": ["C0"],
+      "restructure_note": "Kept as-is from Designer A."
+    }}
+  ],
+  "removed_knowledge_ids": ["K5"],
+  "redirected_ids": {{"K5": "K1"}},
+  "change_report": "2–4 sentence summary of every structural change made."
+}}
+
+Rules:
+- Preserve all IDs that survived conflict resolution; only omit nodes explicitly discarded.
+- Every removed ID must appear in redirected_ids with a surviving replacement.
+- restructure_note must explain what happened to each node (kept, merged, reworded, relinked).
+- Do not add markdown, comments, or text outside the JSON object."""
+
+    @staticmethod
+    def revalidate_concepts_after_merge(
+        topic: str,
+        merged_knowledge_json: str,
+        concepts_a_json: str,
+        concepts_b_json: str,
+        owner_a: str = "Designer A",
+        owner_b: str = "Designer B",
+    ) -> str:
+        """
+        Step 4 of the merge pipeline.
+        Re-validate every concept against the new shared K-space, and detect concept-level
+        conflicts between the two designers' C-spaces.
+        """
+        return f"""### ROLE
+You are a C-K Theory validation expert. Two designers have been working on the same initial
+concept and have now merged their knowledge spaces. Using the new shared K-space, you must:
+  1. Re-validate every concept from both boards.
+  2. Detect concept-level conflicts: pairs of concepts (one from each board) that are
+     semantically similar but received different validation verdicts, or that represent
+     contradictory design directions that cannot coexist in one concept tree.
+
+### TOPIC
+{topic}
+
+### MERGED KNOWLEDGE SPACE
+{merged_knowledge_json}
+
+### {owner_a.upper()}'S CONCEPTS
+{concepts_a_json}
+
+### {owner_b.upper()}'S CONCEPTS
+{concepts_b_json}
+
+### TASK A — Re-validation
+For every concept listed above, evaluate whether the merged knowledge now supports (approved),
+refutes (rejected), or remains ambiguous about (undecidable) that concept.
+
+### TASK B — Concept conflict detection
+Find pairs of concepts — one from {owner_a}, one from {owner_b} — where:
+- Both address the same design dimension but with conflicting attributes or verdicts.
+- They represent mutually exclusive design directions (accepting one rules out the other).
+
+### OUTPUT FORMAT
+Return valid JSON only:
+
+{{
+  "revalidated": [
+    {{
+      "id": "C1",
+      "owner": "{owner_a}",
+      "validationStatus": "approved",
+      "rationale": "One sentence grounded in specific merged knowledge entries."
+    }}
+  ],
+  "concept_conflicts": [
+    {{
+      "concept_a_id": "C2",
+      "concept_b_id": "C3",
+      "owner_a": "{owner_a}",
+      "owner_b": "{owner_b}",
+      "explanation": "C2 proposes attribute X while C3 proposes attribute ¬X for the same design requirement."
+    }}
+  ]
+}}
+
+Rules:
+- validationStatus must be exactly: approved, rejected, or undecidable.
+- Every concept ID from both lists must appear in revalidated.
+- concept_conflicts may be an empty array if no clashes exist.
+- Do not add markdown, comments, or text outside the JSON object."""

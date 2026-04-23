@@ -10,7 +10,6 @@ logging.basicConfig(
 
 app = FastAPI()
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # nginx is the public entry point; FastAPI only reachable internally
@@ -19,9 +18,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to our Platform"}
 
+
 from backend.app.routers import nodes
+from backend.app.routers import auth, boards, sessions, merge
+
 app.include_router(nodes.router)
+app.include_router(auth.router)
+app.include_router(sessions.router)
+app.include_router(boards.router)
+app.include_router(merge.router)

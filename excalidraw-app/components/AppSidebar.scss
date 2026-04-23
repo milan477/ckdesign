@@ -38,7 +38,28 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 0.2rem 0 0.35rem;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+  }
+
+  .ck-agent-panel__split {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    width: 100%;
+    height: 100%;
+  }
+
+  .ck-agent-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    width: clamp(16.5rem, 24vw, 24rem);
+    max-height: 100%;
+    overflow: auto;
+    pointer-events: auto;
   }
 
   .ck-agent-section {
@@ -55,18 +76,7 @@
   }
 
   .ck-agent-section--hero {
-    background:
-      radial-gradient(
-        circle at top right,
-        rgba(240, 140, 0, 0.16),
-        transparent 32%
-      ),
-      radial-gradient(
-        circle at top left,
-        rgba(24, 100, 171, 0.14),
-        transparent 38%
-      ),
-      var(--sidebar-bg-color);
+    background: var(--sidebar-bg-color);
   }
 
   .ck-agent-header,
@@ -75,6 +85,25 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 0.75rem;
+  }
+
+  .ck-back-boards-btn {
+    flex-shrink: 0;
+    padding: 0.3rem 0.65rem;
+    background: #fff9db;
+    border: 1.5px solid #ffd43b;
+    border-radius: 6px;
+    color: #7c5c00;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+
+    &:hover {
+      background: #ffec99;
+      border-color: #fab005;
+    }
   }
 
   .ck-agent-eyebrow,
@@ -552,8 +581,56 @@
   }
 
   @media (max-width: 480px) {
-    .ck-agent-section {
-      padding: 0.75rem;
+    .ck-agent-panel__split {
+      gap: 0.45rem;
+    }
+
+    .ck-agent-pane {
+      width: calc(50vw - 0.75rem);
+      min-width: 0;
+    }
+
+    .ck-agent-pane .ck-agent-title {
+      font-size: 0.95rem;
+    }
+
+    .ck-agent-pane .ck-agent-subtitle {
+      font-size: 0.85rem;
+    }
+
+    .ck-agent-pane .ck-action-button,
+    .ck-agent-pane .ck-agent-input,
+    .ck-agent-pane .ck-small-button,
+    .ck-agent-pane .ck-node-item {
+      font-size: 0.75rem;
+    }
+
+    .ck-agent-pane .ck-action-button {
+      padding: 0.62rem;
+    }
+
+    .ck-agent-pane .ck-summary-value {
+      font-size: 0.95rem;
+    }
+
+    .ck-agent-pane .ck-summary-label,
+    .ck-agent-pane .ck-agent-label,
+    .ck-agent-pane .ck-section-caption,
+    .ck-agent-pane .ck-hint-text {
+      font-size: 0.68rem;
+    }
+
+    .ck-agent-pane .ck-status-pill {
+      font-size: 0.64rem;
+      padding: 0.26rem 0.48rem;
+    }
+
+    .ck-agent-pane .ck-summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .ck-agent-pane .ck-agent-section {
+      gap: 0.7rem;
     }
 
     .ck-agent-header,
@@ -563,13 +640,137 @@
       align-items: stretch;
     }
 
-    .ck-summary-grid {
-      grid-template-columns: 1fr;
-    }
-
     .ck-status-pill,
     .ck-action-badge {
       width: fit-content;
     }
+  }
+}
+
+// ─── Node list validation badge ──────────────────────────────────────────────
+.ck-node-vstatus {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: capitalize;
+
+  &--approved { background: #ebfbee; color: #2f9e44; }
+  &--rejected  { background: #fff5f5; color: #c92a2a; }
+}
+
+// ─── Collaboration push/merge section ────────────────────────────────────────
+.ck-collab-section {
+  margin-top: auto;
+}
+
+.ck-collab-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 0.5rem;
+}
+
+.ck-collab-btn {
+  flex: 1;
+  padding: 0.55rem 0;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  &--push {
+    background: #f08c00;
+    color: #fff;
+    &:hover:not(:disabled) { background: #e67700; }
+  }
+
+  &--merge {
+    background: #1864ab;
+    color: #fff;
+    &:hover:not(:disabled) { background: #1971c2; }
+  }
+
+  &--back {
+    flex: none;
+    width: 100%;
+    background: #f1f3f5;
+    color: #495057;
+    margin-top: 4px;
+    &:hover:not(:disabled) { background: #dee2e6; }
+  }
+}
+
+.ck-collab-feedback {
+  margin-top: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+
+  &.is-ok  { background: #ebfbee; color: #2f9e44; }
+  &.is-err { background: #fff5f5; color: #c92a2a; }
+}
+
+// ─── Validation status picker ────────────────────────────────────────────────
+.ck-validation-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+}
+
+.ck-validation-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #868e96;
+  white-space: nowrap;
+}
+
+.ck-validation-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.ck-validation-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  cursor: pointer;
+  background: #f1f3f5;
+  color: #868e96;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+
+  &--undecidable {
+    &.is-active {
+      background: #fff4e6;
+      border-color: #f08c00;
+      color: #e67700;
+    }
+    &:hover:not(.is-active) { background: #fff4e6; color: #f08c00; }
+  }
+
+  &--approved {
+    &.is-active {
+      background: #ebfbee;
+      border-color: #2f9e44;
+      color: #2f9e44;
+    }
+    &:hover:not(.is-active) { background: #ebfbee; color: #2f9e44; }
+  }
+
+  &--rejected {
+    &.is-active {
+      background: #fff5f5;
+      border-color: #c92a2a;
+      color: #c92a2a;
+    }
+    &:hover:not(.is-active) { background: #fff5f5; color: #c92a2a; }
   }
 }

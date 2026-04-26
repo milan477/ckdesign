@@ -624,6 +624,78 @@ RATIONALE: <2-3 sentences explaining the placement decision>"""
     # ─── Merge prompts ────────────────────────────────────────────────────────
 
     @staticmethod
+    def detect_merge_conflicts(
+        topic: str,
+        concepts_a_json: str,
+        concepts_b_json: str,
+        knowledge_a_json: str,
+        knowledge_b_json: str,
+        owner_a: str = "Designer A",
+        owner_b: str = "Designer B",
+    ) -> str:
+        return f"""You are reviewing two independently built C-K boards for the same design topic.
+
+Topic:
+{topic}
+
+{owner_a}'s concepts:
+{concepts_a_json}
+
+{owner_b}'s concepts:
+{concepts_b_json}
+
+{owner_a}'s knowledge:
+{knowledge_a_json}
+
+{owner_b}'s knowledge:
+{knowledge_b_json}
+
+Your task is to identify merge conflicts between the two boards.
+
+Only use these conflict types:
+- duplicate_concept
+- duplicate_knowledge
+- concept_rejected_by_knowledge
+- contradicting_concept
+
+Definitions:
+- duplicate_concept: both concepts express nearly the same design direction and should likely be unified.
+- duplicate_knowledge: both knowledge nodes express nearly the same knowledge and should likely be unified.
+- concept_rejected_by_knowledge: a concept from one side is challenged, constrained, or rejected by a knowledge node from the other side.
+- contradicting_concept: two concepts propose incompatible design directions for the same issue.
+
+Rules:
+- Compare only across the two boards, never within the same board.
+- Ignore the shared immutable initial concept if it appears in both boards.
+- Do not invent IDs.
+- Each conflict must reference exactly one node from side A and one node from side B.
+- Prefer precision over recall. Do not emit weak or speculative conflicts.
+
+Return a JSON array only. Each object must follow this exact shape:
+{{
+  "conflict_type": "duplicate_concept",
+  "node_a_id": "a:C1",
+  "node_b_id": "b:C2",
+  "explanation": "These two concepts both propose adaptive onboarding that changes guidance based on user progress.",
+  "suggested_resolution": {{
+    "choice": "custom",
+    "title": "Adaptive guided onboarding",
+    "desc": "A short onboarding flow that adapts its guidance to user progress and need.",
+    "rationale": "The ideas overlap strongly, so combining them into one clearer concept keeps the strongest parts of both."
+  }}
+}}
+
+Suggested resolution rules:
+- choice must be one of: "a", "b", "both", "custom"
+- Use "custom" when the best result is a merged or refined node.
+- For duplicate_concept and duplicate_knowledge, usually prefer "custom" or one side.
+- For concept_rejected_by_knowledge, use "custom" if the concept should be revised rather than discarded.
+- For contradicting_concept, use "a", "b", "both", or "custom" depending on whether the concepts can coexist.
+
+If there are no conflicts, return [].
+Return only the JSON array."""
+
+    @staticmethod
     def detect_knowledge_conflicts(
         topic: str,
         knowledge_a_json: str,

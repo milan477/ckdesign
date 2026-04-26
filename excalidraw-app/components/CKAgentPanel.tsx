@@ -21,7 +21,7 @@ import {
   type CKOperation,
 } from "../services/ckAgent";
 import { getStoredSession } from "../services/auth";
-import { saveBoard, loadBoard, pushBoard } from "../services/sessions";
+import { loadBoard, pushBoard } from "../services/sessions";
 import { LocalData } from "../data/LocalData";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 
@@ -132,6 +132,29 @@ interface CKBoardState {
   showNodeDescriptions: boolean;
   savedAt: string;
 }
+
+type MergedSemanticEntry = {
+  id: string;
+  type: CKNodeType;
+  title: string;
+  desc: string;
+  operation_rationale?: string;
+  operationRationale?: string;
+  parent_id?: string | null;
+  parentId?: string | null;
+  source_parent_ids?: string[];
+  sourceParentIds?: string[];
+  validation_status?: ValidationStatus;
+  validationStatus?: ValidationStatus;
+};
+
+type MergedSemanticState = {
+  entries: MergedSemanticEntry[];
+  confirmedInitialConcept?: { title: string; requirements: string } | null;
+  showLineOfThoughtArrows?: boolean;
+  showNodeDescriptions?: boolean;
+  savedAt?: string;
+};
 
 const ACTION_GROUPS: readonly {
   label: string;
@@ -609,8 +632,6 @@ export const CKAgentPanel = ({
   // ─── Board persistence ──────────────────────────────────────────────────
   const _session = getStoredSession();
   const sessionId = _session?.id ?? null;
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const canvasSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasLoadedFromDbRef = useRef(false);
   // Ref-mirrors of state for use in async callbacks (avoids stale closures)
   const confirmedInitialConceptRef = useRef(confirmedInitialConcept);
@@ -714,38 +735,89 @@ export const CKAgentPanel = ({
     }
   };
 
-  // ─── Auto-save (debounced 2.5 s after any node change) ───────────────────
-  useEffect(() => {
-    if (!sessionId || !excalidrawAPI || !nodesRef.current.length) return;
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(async () => {
-      const elements = Array.from(excalidrawAPI.getSceneElements());
-      const ckState = serializeCKState();
-      const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
-      try {
-        await saveBoard(sessionId, elements as unknown[], ckState as unknown, { scrollX, scrollY, zoom });
-      } catch (err) {
-        console.warn("[CKBoard] Auto-save failed:", err);
-      }
-    }, 2500);
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+  const buildCKStateFromMergedSemantic = (state: MergedSemanticState): CKBoardState => {
+    const now = state.savedAt || new Date().toISOString();
+    const conceptEntries = state.entries
+      .filter((entry) => entry.type === "concept")
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    const knowledgeEntries = state.entries
+      .filter((entry) => entry.type === "knowledge")
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+
+    let localSequence = 1;
+    const makeCanvasNode = (entry: MergedSemanticEntry): CKCanvasNode => {
+      const parentId = entry.parentId ?? entry.parent_id ?? null;
+      const sourceParentIds = entry.sourceParentIds ?? entry.source_parent_ids ?? [];
+      return {
+        id: entry.id,
+        type: entry.type,
+        title: entry.title,
+        desc: entry.desc,
+        operationRationale:
+          entry.operationRationale ?? entry.operation_rationale ?? "",
+        parentId,
+        sourceParentIds,
+        validationStatus:
+          entry.validationStatus ?? entry.validation_status ?? "undecided",
+        x: getColumnX(entry.type),
+        y: ROOT_Y,
+        width: NODE_WIDTH,
+        height: estimateNodeHeight(entry.type, entry.id, entry.title, entry.desc),
+        generated: false,
+        status: "accepted",
+        elementId: `ck-merged-node-${entry.id}`,
+        arrowId: null,
+        extraArrowIds: [],
+        sequence: localSequence++,
+        createdAt: now,
+      };
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, sessionId]);
+
+    const conceptNodes = layoutConceptNodes(conceptEntries.map(makeCanvasNode));
+    const knowledgeNodes = layoutColumnNodes(knowledgeEntries.map(makeCanvasNode));
+
+    return {
+      nodes: [...conceptNodes, ...knowledgeNodes],
+      confirmedInitialConcept:
+        state.confirmedInitialConcept ?? confirmedInitialConceptRef.current,
+      novelConceptId: null,
+      novelMarkerElementId: null,
+      validationMarkerElementIds: {},
+      validationStates: {},
+      showLineOfThoughtArrows:
+        state.showLineOfThoughtArrows ?? showLineOfThoughtArrowsRef.current,
+      showNodeDescriptions:
+        state.showNodeDescriptions ?? showNodeDescriptionsRef.current,
+      savedAt: now,
+    };
+  };
 
   // ─── Apply merged state when merge completes ─────────────────────────────
   useEffect(() => {
     const handler = (e: Event) => {
       const { mergedState } = (e as CustomEvent).detail ?? {};
-      if (mergedState && typeof mergedState === "object" && "nodes" in mergedState) {
-        restoreCKState(mergedState as CKBoardState);
-        if (excalidrawAPI) {
-          const elements = (mergedState as CKBoardState).nodes
-            .map((n) => n.elementId)
-            .filter(Boolean);
-          // Full redraw will happen naturally via restoreCKState + next render
-        }
+      if (!mergedState || typeof mergedState !== "object") {
+        return;
+      }
+
+      const previousNodes = nodesRef.current;
+      const nextState =
+        "nodes" in mergedState
+          ? (mergedState as CKBoardState)
+          : "entries" in mergedState
+          ? buildCKStateFromMergedSemantic(mergedState as MergedSemanticState)
+          : null;
+
+      if (!nextState) {
+        return;
+      }
+
+      clearPendingLayouts();
+      restoreCKState(nextState);
+      if (excalidrawAPI) {
+        redrawAllNodesOnCanvas(nextState.nodes, {
+          previousNodesOverride: previousNodes,
+        });
       }
     };
     window.addEventListener("ck-merge-apply", handler);
@@ -767,6 +839,15 @@ export const CKAgentPanel = ({
     loadBoard(sessionId)
       .then((board) => {
         const currentSession = getStoredSession();
+        const raw = board?.ck_nodes as unknown;
+        const hasSemanticState =
+          !!raw &&
+          typeof raw === "object" &&
+          !Array.isArray(raw) &&
+          "nodes" in raw &&
+          Array.isArray((raw as { nodes?: unknown[] }).nodes) &&
+          ((raw as { nodes: unknown[] }).nodes?.length ?? 0) > 0;
+
         console.log("[CKBoard] loadBoard result:", {
           sessionId,
           boardFound: !!board,
@@ -775,6 +856,16 @@ export const CKAgentPanel = ({
         });
 
         if (!board || !(board.elements as unknown[])?.length) {
+          if (hasSemanticState) {
+            const semanticState = raw as CKBoardState;
+            restoreCKState(semanticState);
+            redrawAllNodesOnCanvas(semanticState.nodes, {
+              previousNodesOverride: [],
+            });
+            hasHydratedFromCanvasRef.current = true;
+            return;
+          }
+
           // No saved board or empty board — seed from session metadata
           if (currentSession?.initial_concept) {
             const title = currentSession.initial_concept;
@@ -824,7 +915,6 @@ export const CKAgentPanel = ({
           }
         }
 
-        const raw = board.ck_nodes as unknown;
         if (raw && typeof raw === "object" && !Array.isArray(raw) && "nodes" in raw) {
           restoreCKState(raw as CKBoardState);
           hasHydratedFromCanvasRef.current = true;
@@ -1241,23 +1331,6 @@ export const CKAgentPanel = ({
             }
           }
         }
-      }
-
-      // Debounced save on canvas changes (e.g. element drag) — captures updated positions
-      if (sessionId && nodesRef.current.length > 0) {
-        if (canvasSaveTimeoutRef.current) clearTimeout(canvasSaveTimeoutRef.current);
-        canvasSaveTimeoutRef.current = setTimeout(async () => {
-          // Sync node positions from live canvas without mutating nodesRef (avoid races)
-          const syncedNodes = syncNodeGeometryFromCanvas(nodesRef.current);
-          const sceneElements = Array.from(excalidrawAPI.getSceneElements());
-          const ckState = { ...serializeCKState(), nodes: syncedNodes };
-          const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
-          try {
-            await saveBoard(sessionId, sceneElements as unknown[], ckState as unknown, { scrollX, scrollY, zoom });
-          } catch {
-            // silent — position save is best-effort
-          }
-        }, 3000);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3145,9 +3218,15 @@ export const CKAgentPanel = ({
     setIsPushing(true);
     setPushFeedback(null);
     try {
+      const syncedNodes = syncNodeGeometryFromCanvas(nodesRef.current);
       const elements = Array.from(excalidrawAPI.getSceneElements());
-      const ckState = serializeCKState();
-      await pushBoard(sessionId, elements as unknown[], ckState as unknown, {});
+      const ckState = { ...serializeCKState(), nodes: syncedNodes };
+      const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
+      await pushBoard(sessionId, elements as unknown[], ckState as unknown, {
+        scrollX,
+        scrollY,
+        zoom,
+      });
       setPushFeedback({ ok: true, msg: "Board pushed successfully." });
     } catch (err) {
       setPushFeedback({ ok: false, msg: err instanceof Error ? err.message : "Push failed." });

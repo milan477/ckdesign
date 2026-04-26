@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS merges (
     session_id      UUID UNIQUE REFERENCES collaboration_sessions(id) ON DELETE CASCADE,
     initiator_id    UUID REFERENCES users(id),
     status          TEXT NOT NULL DEFAULT 'detecting',
-    -- detecting → conflict_review → restructuring → concept_review → done
+    -- detecting → conflict_review → done
     merged_ck_state JSONB,          -- final merged CK state after completion
     completed_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
@@ -85,12 +85,12 @@ CREATE TRIGGER merges_updated_at
 CREATE TABLE IF NOT EXISTS merge_conflicts (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     merge_id        UUID REFERENCES merges(id) ON DELETE CASCADE,
-    conflict_type   TEXT NOT NULL,  -- 'knowledge' | 'concept'
-    step            INTEGER NOT NULL, -- 1=knowledge clash, 2=concept clash
+    conflict_type   TEXT NOT NULL,  -- duplicate_concept | duplicate_knowledge | concept_rejected_by_knowledge | contradicting_concept
+    step            INTEGER NOT NULL, -- currently 1 for the grouped merge-review step
     node_a          JSONB NOT NULL,  -- node from user A
     node_b          JSONB NOT NULL,  -- node from user B
     explanation     TEXT NOT NULL,   -- LLM explanation of the conflict
-    resolution      JSONB,           -- null until user resolves
+    resolution      JSONB,           -- suggested resolution + final user decision
     resolved_at     TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );

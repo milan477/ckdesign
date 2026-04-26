@@ -12,6 +12,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,32}$")
+_BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
 class SignupRequest(BaseModel):
@@ -30,10 +31,22 @@ class AuthResponse(BaseModel):
     username: str
 
 
+def _validate_password_length(password: str | None) -> None:
+    if password is None:
+        return
+    password_bytes = password.encode("utf-8")
+    if len(password_bytes) > _BCRYPT_MAX_PASSWORD_BYTES:
+        raise HTTPException(
+            400,
+            "Password must be 72 bytes or fewer for bcrypt. Use a shorter ASCII-only password.",
+        )
+
+
 @router.post("/signup", response_model=AuthResponse)
 async def signup(req: SignupRequest):
     if not _USERNAME_RE.match(req.username):
         raise HTTPException(400, "Username must be 3-32 chars: letters, numbers, _ or -")
+    _validate_password_length(req.password)
 
     db = get_supabase()
 
@@ -54,6 +67,8 @@ async def signup(req: SignupRequest):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(req: LoginRequest):
+    _validate_password_length(req.password)
+
     db = get_supabase()
 
     result = db.table("users").select("*").eq("username", req.username).execute()

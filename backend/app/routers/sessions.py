@@ -1,17 +1,19 @@
-import random
+import secrets
 import string
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.app.core.security import get_current_user
+from backend.app.core.collaboration import get_session_members
 from backend.app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 def _gen_code(length: int = 6) -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 class CreateSessionRequest(BaseModel):
@@ -80,6 +82,9 @@ async def join_session(req: JoinSessionRequest, user: dict = Depends(get_current
     if existing_member.data:
         role = existing_member.data[0]["role"]
     else:
+        if len(get_session_members(db, session["id"])) >= 2:
+            raise HTTPException(409, "This collaboration session already has two participants.")
+
         db.table("session_members").insert({
             "session_id": session["id"],
             "user_id": user["sub"],

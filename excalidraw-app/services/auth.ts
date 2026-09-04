@@ -21,38 +21,54 @@ export interface SessionInfo {
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
-export function getStoredUser(): AuthUser | null {
+function readSessionValue<T>(key: string): T | null {
   try {
-    const raw = localStorage.getItem(STORAGE_USER);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
+    const raw = sessionStorage.getItem(key);
+    if (raw) {
+      return JSON.parse(raw) as T;
+    }
+
+    // One-time migration from the old cross-tab storage. Removing the legacy
+    // value is important: otherwise every tab can silently become the same user.
+    const legacy = localStorage.getItem(key);
+    if (!legacy) {
+      return null;
+    }
+    sessionStorage.setItem(key, legacy);
+    localStorage.removeItem(key);
+    return JSON.parse(legacy) as T;
   } catch {
     return null;
   }
 }
 
+export function getStoredUser(): AuthUser | null {
+  return readSessionValue<AuthUser>(STORAGE_USER);
+}
+
 export function storeUser(user: AuthUser): void {
-  localStorage.setItem(STORAGE_USER, JSON.stringify(user));
+  sessionStorage.setItem(STORAGE_USER, JSON.stringify(user));
+  localStorage.removeItem(STORAGE_USER);
 }
 
 export function clearUser(): void {
+  sessionStorage.removeItem(STORAGE_USER);
+  sessionStorage.removeItem(STORAGE_SESSION);
   localStorage.removeItem(STORAGE_USER);
   localStorage.removeItem(STORAGE_SESSION);
 }
 
 export function getStoredSession(): SessionInfo | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_SESSION);
-    return raw ? (JSON.parse(raw) as SessionInfo) : null;
-  } catch {
-    return null;
-  }
+  return readSessionValue<SessionInfo>(STORAGE_SESSION);
 }
 
 export function storeSession(session: SessionInfo): void {
-  localStorage.setItem(STORAGE_SESSION, JSON.stringify(session));
+  sessionStorage.setItem(STORAGE_SESSION, JSON.stringify(session));
+  localStorage.removeItem(STORAGE_SESSION);
 }
 
 export function clearSession(): void {
+  sessionStorage.removeItem(STORAGE_SESSION);
   localStorage.removeItem(STORAGE_SESSION);
 }
 

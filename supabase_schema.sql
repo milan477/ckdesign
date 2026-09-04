@@ -59,6 +59,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS boards_updated_at ON boards;
 CREATE TRIGGER boards_updated_at
     BEFORE UPDATE ON boards
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS merges (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS merges_updated_at ON merges;
 CREATE TRIGGER merges_updated_at
     BEFORE UPDATE ON merges
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

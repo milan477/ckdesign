@@ -10,7 +10,7 @@ import {
   type MergeState,
   type Resolution,
 } from "../services/mergeApi";
-import { getStoredSession, storeSession } from "../services/auth";
+import { getStoredSession } from "../services/auth";
 
 import "./MergeWorkspace.scss";
 

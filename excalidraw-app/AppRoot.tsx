@@ -59,7 +59,7 @@ export default function AppRoot() {
 
   return (
     <>
-      <ExcalidrawApp />
+      <ExcalidrawApp key={`${user.id}:${session.id}`} />
       {mergeOpen && (
         <MergeWorkspace
           onClose={() => setMergeOpen(false)}

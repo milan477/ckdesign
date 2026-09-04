@@ -9,7 +9,7 @@ from backend.app.db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd = CryptContext(schemes=["bcrypt_sha256", "bcrypt"], deprecated="auto")
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,32}$")
 

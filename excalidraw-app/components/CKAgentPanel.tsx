@@ -739,19 +739,36 @@ export const CKAgentPanel = ({
     const handler = (e: Event) => {
       const { mergedState } = (e as CustomEvent).detail ?? {};
       if (mergedState && typeof mergedState === "object" && "nodes" in mergedState) {
-        restoreCKState(mergedState as CKBoardState);
-        if (excalidrawAPI) {
-          const elements = (mergedState as CKBoardState).nodes
-            .map((n) => n.elementId)
-            .filter(Boolean);
-          // Full redraw will happen naturally via restoreCKState + next render
+        const state = mergedState as CKBoardState;
+        const previousNodes = nodesRef.current;
+        restoreCKState(state);
+        const redrawnNodes = redrawAllNodesOnCanvas(state.nodes ?? [], {
+          previousNodesOverride: previousNodes,
+        });
+
+        if (sessionId && excalidrawAPI) {
+          const persistedState = {
+            ...state,
+            nodes: redrawnNodes,
+            savedAt: new Date().toISOString(),
+          };
+          window.setTimeout(() => {
+            const elements = Array.from(excalidrawAPI.getSceneElements());
+            const { scrollX, scrollY, zoom } = excalidrawAPI.getAppState();
+            void saveBoard(
+              sessionId,
+              elements as unknown[],
+              persistedState as unknown,
+              { scrollX, scrollY, zoom },
+            );
+          }, 0);
         }
       }
     };
     window.addEventListener("ck-merge-apply", handler);
     return () => window.removeEventListener("ck-merge-apply", handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [excalidrawAPI]);
+  }, [excalidrawAPI, sessionId]);
 
   // ─── Disable localStorage while session is active ────────────────────────
   useEffect(() => {

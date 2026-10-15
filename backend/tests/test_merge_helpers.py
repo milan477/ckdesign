@@ -1,100 +1,111 @@
 import unittest
 
 from backend.app.routers.merge import (
-    _conflict_node_ids,
-    _conflict_node_payload,
-    _deconflict_node_positions,
-    _normalise_board_node_ids,
+    _assemble_merged_entries,
+    _build_conflict_payload,
+    _normalize_board_nodes,
 )
 
 
-def _node(node_id: str, node_type: str, parent_id: str | None = None) -> dict:
+def _node(node_id: str, node_type: str, title: str, parent_id: str | None = None) -> dict:
     return {
         "id": node_id,
         "type": node_type,
-        "title": f"{node_id} title",
-        "desc": "",
+        "title": title,
+        "desc": f"{title} description",
         "parentId": parent_id,
         "sourceParentIds": [parent_id] if parent_id else [],
-        "x": 100 if node_type == "concept" else 700,
-        "y": 100,
-        "width": 260,
-        "height": 140,
         "sequence": 1,
-        "elementId": f"element-{node_id}",
-        "arrowId": f"arrow-{node_id}" if parent_id else None,
-        "extraArrowIds": [],
+    }
+
+
+def _board(owner: str, concept_title: str, knowledge_title: str) -> dict:
+    return {
+        "owner_name": owner,
+        "ck_nodes": {
+            "confirmedInitialConcept": {"title": "Shared root", "requirements": ""},
+            "nodes": [
+                _node("C0", "concept", "Shared root"),
+                _node("C1", "concept", concept_title, "C0"),
+                _node("K0", "knowledge", knowledge_title, "C1"),
+            ],
+        },
     }
 
 
 class MergeHelpersTest(unittest.TestCase):
-    def test_independent_board_ids_are_kept_unique(self) -> None:
-        board_a = {
-            "user_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "ck_nodes": {
-                "nodes": [
-                    _node("C0", "concept"),
-                    _node("C1", "concept", "C0"),
-                    _node("K0", "knowledge", "C1"),
-                ]
+    def setUp(self) -> None:
+        self.board_a = _board("alice", "Solar canopy", "Solar output varies")
+        self.board_b = _board("bob", "Covered bike network", "Rain affects cycling")
+
+    def test_same_local_ids_are_namespaced_by_source_board(self) -> None:
+        nodes_a = _normalize_board_nodes(self.board_a, "a")
+        nodes_b = _normalize_board_nodes(self.board_b, "b")
+
+        self.assertIn("a:C1", {node["merge_ref"] for node in nodes_a})
+        self.assertIn("b:C1", {node["merge_ref"] for node in nodes_b})
+        self.assertIn("a:K0", {node["merge_ref"] for node in nodes_a})
+        self.assertIn("b:K0", {node["merge_ref"] for node in nodes_b})
+
+    def test_assembly_preserves_both_boards_and_remaps_parent_ids(self) -> None:
+        merged = _assemble_merged_entries([], self.board_a, self.board_b)
+        entries = merged["entries"]
+
+        self.assertEqual(len({entry["id"] for entry in entries}), len(entries))
+        self.assertEqual(sum(entry["id"] == "C0" for entry in entries), 1)
+        self.assertEqual(
+            {entry["title"] for entry in entries},
+            {
+                "Shared root",
+                "Solar canopy",
+                "Covered bike network",
+                "Solar output varies",
+                "Rain affects cycling",
             },
+        )
+
+        concept_by_title = {
+            entry["title"]: entry["id"]
+            for entry in entries
+            if entry["type"] == "concept"
         }
-        board_b = {
-            "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-            "ck_nodes": {
-                "nodes": [
-                    _node("C0", "concept"),
-                    _node("C1", "concept", "C0"),
-                    _node("K0", "knowledge", "C1"),
-                ]
-            },
+        knowledge_by_title = {
+            entry["title"]: entry
+            for entry in entries
+            if entry["type"] == "knowledge"
+        }
+        self.assertEqual(
+            knowledge_by_title["Solar output varies"]["parent_id"],
+            concept_by_title["Solar canopy"],
+        )
+        self.assertEqual(
+            knowledge_by_title["Rain affects cycling"]["parent_id"],
+            concept_by_title["Covered bike network"],
+        )
+
+    def test_conflict_choice_removes_only_the_rejected_source_node(self) -> None:
+        concept_a = next(
+            node for node in _normalize_board_nodes(self.board_a, "a")
+            if node["merge_ref"] == "a:C1"
+        )
+        concept_b = next(
+            node for node in _normalize_board_nodes(self.board_b, "b")
+            if node["merge_ref"] == "b:C1"
+        )
+        conflict = {
+            "id": "conflict-1",
+            "conflict_type": "duplicate_concept",
+            "node_a": _build_conflict_payload(concept_a),
+            "node_b": _build_conflict_payload(concept_b),
+            "resolution": {"choice": "a"},
         }
 
-        used_ids: set[str] = set()
-        normal_a = _normalise_board_node_ids(board_a, used_ids, primary=True)
-        normal_b = _normalise_board_node_ids(board_b, used_ids, primary=False)
+        merged = _assemble_merged_entries([conflict], self.board_a, self.board_b)
+        titles = {entry["title"] for entry in merged["entries"]}
 
-        nodes_a = normal_a["ck_nodes"]["nodes"]
-        nodes_b = normal_b["ck_nodes"]["nodes"]
-        all_nodes = [*nodes_a, *nodes_b]
-
-        self.assertEqual([node["id"] for node in nodes_a], ["C0", "C1", "K0"])
-        self.assertEqual([node["id"] for node in nodes_b], ["C2", "K1"])
-        self.assertEqual(nodes_b[0]["parentId"], "C0")
-        self.assertEqual(nodes_b[1]["parentId"], "C2")
-        self.assertEqual(len({node["id"] for node in all_nodes}), len(all_nodes))
-        self.assertEqual(len({node["elementId"] for node in all_nodes}), len(all_nodes))
-
-    def test_merged_nodes_do_not_overlap_within_a_column(self) -> None:
-        nodes = [
-            _node("C0", "concept"),
-            _node("C1", "concept", "C0"),
-            _node("C2", "concept", "C0"),
-            _node("K0", "knowledge", "C1"),
-            _node("K1", "knowledge", "C2"),
-        ]
-
-        positioned = _deconflict_node_positions(nodes)
-        for node_type in ("concept", "knowledge"):
-            typed = sorted(
-                (node for node in positioned if node["type"] == node_type),
-                key=lambda node: node["y"],
-            )
-            for previous, current in zip(typed, typed[1:]):
-                self.assertGreaterEqual(
-                    current["y"],
-                    previous["y"] + previous["height"] + 60,
-                )
-
-    def test_combination_conflicts_remain_renderable_and_resolvable(self) -> None:
-        nodes = [_node("K0", "knowledge"), _node("K1", "knowledge")]
-
-        payload = _conflict_node_payload(nodes, "alice")
-
-        self.assertEqual(payload["id"], "K0+K1")
-        self.assertEqual(payload["owner"], "alice")
-        self.assertIn("K0 title", payload["title"])
-        self.assertEqual(_conflict_node_ids(payload), ["K0", "K1"])
+        self.assertIn("Solar canopy", titles)
+        self.assertNotIn("Covered bike network", titles)
+        self.assertIn("Rain affects cycling", titles)
 
 
 if __name__ == "__main__":
